@@ -7,7 +7,7 @@ import (
 	"os"
 	"syscall/js"
 
-	"github.com/gocommander/gocommander/cmd"
+	"github.com/rohitsoni-dev/gocommander/cmd"
 )
 
 var (

@@ -1,0 +1,34 @@
+# Build outputs
+lib/
+dist/
+wasm/
+coverage/
+
+# Dependencies
+node_modules/
+
+# Generated files
+*.wasm
+*.min.js
+*.bundle.js
+
+# Documentation (auto-generated)
+docs/api/
+
+# Test outputs
+test-results.xml
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.temp

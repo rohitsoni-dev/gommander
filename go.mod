@@ -1,3 +1,3 @@
-module github.com/gocommander/gocommander
+module github.com/rohitsoni-dev/gocommander
 
 go 1.21
