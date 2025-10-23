@@ -1,0 +1,42 @@
+{
+  "environment": {
+    "platform": "win32",
+    "arch": "x64",
+    "nodeVersion": "v24.1.0",
+    "osRelease": "10.0.19045",
+    "hostname": "DESKTOP-QP19VI3",
+    "cpus": 8,
+    "memory": 22,
+    "startTime": "2025-10-23T12:25:59.483Z"
+  },
+  "categories": {
+    "comprehensive-e2e": {
+      "name": "Comprehensive End-to-End Integration",
+      "passed": true,
+      "duration": 5284,
+      "description": "Complete integration testing with WASM compilation and real-world scenarios"
+    },
+    "enhanced-e2e": {
+      "name": "Enhanced End-to-End WASM Integration",
+      "passed": false,
+      "duration": 5177,
+      "description": "Enhanced WASM integration tests with advanced features",
+      "error": "Command failed: npx jest --testPathPattern tests/integration/enhanced-e2e.test.js --testTimeout 90000 --verbose --no-cache --forceExit --detectOpenHandles --maxWorkers=1\n\u001b[33m\u001b[1m\u001b[1m●\u001b[22m\u001b[1m Validation Warning\u001b[22m:\u001b[39m\n\u001b[33m\u001b[39m\n\u001b[33m  Unknown option \u001b[1m\"testTimeout\"\u001b[22m with value \u001b[1m10000\u001b[22m was found.\u001b[39m\n\u001b[33m  This is probably a typing mistake. Fixing it will remove this message.\u001b[39m\n\u001b[33m\u001b[39m\n\u001b[33m  \u001b[1mConfiguration Documentation:\u001b[22m\u001b[39m\n\u001b[33m  https://jestjs.io/docs/conf"
+    },
+    "e2e": {
+      "name": "End-to-End WASM Integration",
+      "passed": false,
+      "duration": 5269,
+      "description": "Core WASM integration and functionality tests",
+      "error": "Command failed: npx jest --testPathPattern tests/integration/e2e-wasm.test.js --testTimeout 60000 --verbose --no-cache --forceExit --detectOpenHandles --maxWorkers=1\n\u001b[33m\u001b[1m\u001b[1m●\u001b[22m\u001b[1m Validation Warning\u001b[22m:\u001b[39m\n\u001b[33m\u001b[39m\n\u001b[33m  Unknown option \u001b[1m\"testTimeout\"\u001b[22m with value \u001b[1m10000\u001b[22m was found.\u001b[39m\n\u001b[33m  This is probably a typing mistake. Fixing it will remove this message.\u001b[39m\n\u001b[33m\u001b[39m\n\u001b[33m  \u001b[1mConfiguration Documentation:\u001b[22m\u001b[39m\n\u001b[33m  https://jestjs.io/docs/configur"
+    }
+  },
+  "summary": {
+    "totalCategories": 3,
+    "passedCategories": 1,
+    "failedCategories": 2,
+    "totalDuration": 21818,
+    "successRate": "33.3",
+    "endTime": "2025-10-23T12:26:21.241Z"
+  }
+}

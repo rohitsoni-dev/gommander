@@ -64,9 +64,23 @@ GoCommander provides significant performance improvements over Commander.js:
 - **Lower memory usage** due to efficient Go implementation
 - **Faster startup time** with optimized WASM loading
 
-## API Documentation
+## Documentation
 
-GoCommander implements the complete Commander.js API. See the [Commander.js documentation](https://github.com/tj/commander.js) for full API details.
+📚 **[Complete Documentation](docs/README.md)**
+
+### Quick Links
+
+- 🚀 **[Getting Started](docs/getting-started.md)** - Installation and basic usage
+- 📖 **[API Reference](docs/api/)** - Complete API documentation
+  - [Command API](docs/api/command.md)
+  - [Option API](docs/api/option.md)
+  - [Argument API](docs/api/argument.md)
+  - [Help API](docs/api/help.md)
+  - [Error Handling](docs/api/errors.md)
+- 🔄 **[Migration Guide](docs/migration-guide.md)** - Migrate from Commander.js
+- ⚡ **[Performance Comparison](docs/performance.md)** - Benchmarks and optimization
+- 🎯 **[Examples](docs/examples/)** - Real-world usage examples
+- 🔧 **[Advanced Usage](docs/advanced.md)** - Advanced patterns and techniques
 
 ### Supported Features
 
@@ -78,6 +92,9 @@ GoCommander implements the complete Commander.js API. See the [Commander.js docu
 - ✅ Custom parsers
 - ✅ Error handling
 - ✅ TypeScript definitions
+- ✅ Async actions
+- ✅ Lifecycle hooks
+- ✅ Custom help formatting
 
 ## Building from Source
 
@@ -91,7 +108,7 @@ GoCommander implements the complete Commander.js API. See the [Commander.js docu
 
 ```bash
 # Clone the repository
-git clone https://github.com/gocommander/gocommander.git
+git clone https://github.com/rohitsoni-dev/gocommander.git
 cd gocommander
 
 # Install dependencies

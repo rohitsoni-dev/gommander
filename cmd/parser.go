@@ -22,6 +22,11 @@ type Parser struct {
 	EnablePositionalOptions     bool
 	PassThroughOptions          bool
 	CombineFlagAndOptionalValue bool
+
+	// Enhanced parsing configuration
+	UnknownOptionHandler  func(option string, value string) error
+	ExcessArgumentHandler func(args []string) error
+	PositionalOptionMap   map[int]string // Maps position to option name
 }
 
 // NewParser creates a new parser with default settings
@@ -32,7 +37,26 @@ func NewParser() *Parser {
 		EnablePositionalOptions:     false,
 		PassThroughOptions:          false,
 		CombineFlagAndOptionalValue: true,
+		PositionalOptionMap:         make(map[int]string),
 	}
+}
+
+// SetPositionalOption maps a position to an option name for positional option parsing
+func (p *Parser) SetPositionalOption(position int, optionName string) {
+	if p.PositionalOptionMap == nil {
+		p.PositionalOptionMap = make(map[int]string)
+	}
+	p.PositionalOptionMap[position] = optionName
+}
+
+// SetUnknownOptionHandler sets a custom handler for unknown options
+func (p *Parser) SetUnknownOptionHandler(handler func(option string, value string) error) {
+	p.UnknownOptionHandler = handler
+}
+
+// SetExcessArgumentHandler sets a custom handler for excess arguments
+func (p *Parser) SetExcessArgumentHandler(handler func(args []string) error) {
+	p.ExcessArgumentHandler = handler
 }
 
 // Token represents a parsed command-line token
@@ -194,8 +218,49 @@ func (p *Parser) parseTokens(cmd *Command, tokens []Token, result *ParsedCommand
 					// Set up parser configuration from parent command
 					p.inheritParentConfiguration(cmd, subCmd)
 
-					return p.ParseCommand(subCmd, remainingArgs)
+					// Execute pre-subcommand hook if present
+					if cmd.PreSubcommand != nil {
+						if err := cmd.PreSubcommand(cmd, subCmd); err != nil {
+							return nil, fmt.Errorf("pre-subcommand hook failed: %v", err)
+						}
+					}
+
+					// Parse with the subcommand
+					subResult, err := p.ParseCommand(subCmd, remainingArgs)
+					if err != nil {
+						return nil, err
+					}
+
+					// Update result to reflect subcommand execution
+					result.Command = subResult.Command
+					result.Options = subResult.Options
+					result.Arguments = subResult.Arguments
+					result.Unknown = subResult.Unknown
+
+					return result, nil
 				}
+			}
+
+			// Check for default subcommand if no arguments match and we have a default
+			if !doubleDashSeen && argIndex == 0 && cmd.GetDefaultSubcommand() != nil {
+				defaultCmd := cmd.GetDefaultSubcommand()
+
+				// Parse all remaining tokens with default command
+				remainingArgs := make([]string, 0, len(tokens)-i)
+				for j := i; j < len(tokens); j++ {
+					remainingArgs = append(remainingArgs, tokens[j].Raw)
+				}
+
+				p.inheritParentConfiguration(cmd, defaultCmd)
+
+				// Execute pre-subcommand hook if present
+				if cmd.PreSubcommand != nil {
+					if err := cmd.PreSubcommand(cmd, defaultCmd); err != nil {
+						return nil, fmt.Errorf("pre-subcommand hook failed: %v", err)
+					}
+				}
+
+				return p.ParseCommand(defaultCmd, remainingArgs)
 			}
 
 			// Handle as regular argument
@@ -238,6 +303,24 @@ func (p *Parser) parseTokens(cmd *Command, tokens []Token, result *ParsedCommand
 
 // handleArgument processes a regular argument with enhanced validation
 func (p *Parser) handleArgument(cmd *Command, value string, argIndex *int, result *ParsedCommand) error {
+	// Check for positional options first
+	if p.EnablePositionalOptions {
+		if optionName, exists := p.PositionalOptionMap[*argIndex]; exists {
+			// Treat this argument as a positional option
+			option := cmd.FindOption(optionName)
+			if option != nil {
+				key := p.getOptionKey(option)
+				parsedValue, err := option.ProcessOptionValue(value, result.Options[key], false)
+				if err != nil {
+					return fmt.Errorf("invalid positional option value '%s' for option '%s': %v", value, optionName, err)
+				}
+				result.Options[key] = parsedValue
+				*argIndex++
+				return nil
+			}
+		}
+	}
+
 	if *argIndex < len(cmd.Arguments) {
 		cmdArg := cmd.Arguments[*argIndex]
 
@@ -278,8 +361,14 @@ func (p *Parser) handleArgument(cmd *Command, value string, argIndex *int, resul
 			*argIndex++
 		}
 	} else {
-		// Extra argument handling
-		if cmd.AllowExcessArguments {
+		// Enhanced excess argument handling
+		if p.ExcessArgumentHandler != nil {
+			// Use custom handler for excess arguments
+			if err := p.ExcessArgumentHandler([]string{value}); err != nil {
+				return err
+			}
+			result.Unknown = append(result.Unknown, value)
+		} else if cmd.AllowExcessArguments {
 			result.Unknown = append(result.Unknown, value)
 		} else {
 			return fmt.Errorf("unexpected argument: %s (expected %d arguments, got %d)",
@@ -430,9 +519,14 @@ func (p *Parser) findSimilarOption(cmd *Command, flag string) string {
 
 // resolveSubcommand performs enhanced subcommand resolution with lookahead
 func (p *Parser) resolveSubcommand(cmd *Command, name string, remainingTokens []Token) *Command {
-	// First, try exact match
-	if subCmd := cmd.FindSubcommand(name); subCmd != nil {
+	// First, try exact match by name or alias
+	if subCmd := cmd.FindSubcommandByNameOrAlias(name); subCmd != nil {
 		return subCmd
+	}
+
+	// Check for default subcommand if no match found and no arguments provided
+	if cmd.GetDefaultSubcommand() != nil && len(remainingTokens) == 0 {
+		return cmd.GetDefaultSubcommand()
 	}
 
 	// If no exact match and we have remaining tokens, check for compound commands
@@ -443,7 +537,7 @@ func (p *Parser) resolveSubcommand(cmd *Command, name string, remainingTokens []
 				// Check if the next token could be a sub-subcommand
 				nextToken := remainingTokens[0]
 				if nextToken.Type == TokenArgument {
-					if subSubCmd := subCmd.FindSubcommand(nextToken.Value); subSubCmd != nil {
+					if subSubCmd := subCmd.FindSubcommandByNameOrAlias(nextToken.Value); subSubCmd != nil {
 						// This is a nested subcommand scenario
 						return subCmd
 					}
@@ -548,10 +642,51 @@ func (p *Parser) handleOption(cmd *Command, tokens []Token, index int, result *P
 	// Enhanced option matching with better flag resolution
 	option := p.findOptionWithContext(cmd, token.Value, token.Type)
 	if option == nil {
+		// Handle unknown options with enhanced logic
+		if p.PassThroughOptions {
+			// Pass through unknown options to the result
+			result.Unknown = append(result.Unknown, token.Raw)
+
+			// Check if next token is a value for this unknown option
+			consumed := 1
+			if index+1 < len(tokens) && tokens[index+1].Type == TokenArgument {
+				nextToken := tokens[index+1]
+				if !strings.HasPrefix(nextToken.Value, "-") {
+					result.Unknown = append(result.Unknown, nextToken.Value)
+					consumed = 2
+				}
+			}
+			return consumed, nil
+		}
+
+		if p.UnknownOptionHandler != nil {
+			// Use custom handler for unknown options
+			var value string
+			consumed := 1
+			if index+1 < len(tokens) && tokens[index+1].Type == TokenArgument {
+				nextToken := tokens[index+1]
+				if !strings.HasPrefix(nextToken.Value, "-") {
+					value = nextToken.Value
+					consumed = 2
+				}
+			}
+
+			if err := p.UnknownOptionHandler(token.Value, value); err != nil {
+				return 0, err
+			}
+
+			result.Unknown = append(result.Unknown, token.Raw)
+			if value != "" {
+				result.Unknown = append(result.Unknown, value)
+			}
+			return consumed, nil
+		}
+
 		if p.AllowUnknownOptions {
 			result.Unknown = append(result.Unknown, token.Raw)
 			return 1, nil
 		}
+
 		return 0, fmt.Errorf("unknown option: %s", token.Raw)
 	}
 
