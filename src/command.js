@@ -531,8 +531,20 @@ Expecting one of '${allowedValues.join("', '")}'`);
     }
 
     helpGroup(heading) {
-        if (heading === undefined) return this._helpGroupHeading;
+        if (heading === undefined) return this._helpGroupHeading ?? '';
         this._helpGroupHeading = heading;
+        return this;
+    }
+
+    commandsGroup(heading) {
+        if (heading === undefined) return this._defaultCommandGroup ?? '';
+        this._defaultCommandGroup = heading;
+        return this;
+    }
+
+    optionsGroup(heading) {
+        if (heading === undefined) return this._defaultOptionGroup ?? '';
+        this._defaultOptionGroup = heading;
         return this;
     }
 
@@ -1176,6 +1188,18 @@ Expecting one of '${allowedValues.join("', '")}'`);
         return this;
     }
 
+    addHelpOption(option) {
+        this._helpOption = option;
+        this._initOptionGroup(option);
+        return this;
+    }
+
+    _initOptionGroup(option) {
+        if (this._defaultOptionGroup && !option.helpGroupHeading) {
+            option.helpGroup(this._defaultOptionGroup);
+        }
+    }
+
     _getHelpCommand() {
         const hasImplicitHelpCommand =
             this._addImplicitHelpCommand ??
@@ -1565,6 +1589,16 @@ Expecting one of '${allowedValues.join("', '")}'`);
             this._helpOption = this.createOption('-h, --help', 'display help for command');
         }
         return this._helpOption;
+    }
+
+    _outputHelpIfRequested(args) {
+        const helpOption = this._getHelpOption();
+        const helpRequested = helpOption && args.find((arg) => helpOption.is(arg));
+        if (helpRequested) {
+            this.outputHelp();
+            // (Do not have all displayed text available so only passing placeholder.)
+            this._exit(0, 'commander.helpDisplayed', '(outputHelp)');
+        }
     }
 
     _checkForMissingMandatoryOptions() {
