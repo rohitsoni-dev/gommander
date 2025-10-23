@@ -572,6 +572,41 @@ Expecting one of '${allowedValues.join("', '")}'`);
     }
 
     /**
+     * Clear all positional option mappings
+     */
+    clearPositionalOptions() {
+        this._positionalOptions = null;
+        return this;
+    }
+
+    /**
+     * Remove a specific positional option mapping
+     */
+    removePositionalOption(position) {
+        if (this._positionalOptions) {
+            this._positionalOptions.delete(position);
+            if (this._positionalOptions.size === 0) {
+                this._positionalOptions = null;
+            }
+        }
+        return this;
+    }
+
+    /**
+     * Set multiple positional options at once
+     */
+    setPositionalOptions(mappings) {
+        if (typeof mappings === 'object' && mappings !== null) {
+            this._positionalOptions = new Map();
+            for (const [position, optionName] of Object.entries(mappings)) {
+                this._positionalOptions.set(parseInt(position), optionName);
+                this._setPositionalOptionInWASM(parseInt(position), optionName);
+            }
+        }
+        return this;
+    }
+
+    /**
      * Set custom handler for unknown options
      */
     setUnknownOptionHandler(handler) {
@@ -596,6 +631,62 @@ Expecting one of '${allowedValues.join("', '")}'`);
     }
 
     /**
+     * Remove custom handler for unknown options
+     */
+    removeUnknownOptionHandler() {
+        this._unknownOptionHandler = null;
+        return this;
+    }
+
+    /**
+     * Remove custom handler for excess arguments
+     */
+    removeExcessArgumentHandler() {
+        this._excessArgumentHandler = null;
+        return this;
+    }
+
+    /**
+     * Get current unknown option handler
+     */
+    getUnknownOptionHandler() {
+        return this._unknownOptionHandler;
+    }
+
+    /**
+     * Get current excess argument handler
+     */
+    getExcessArgumentHandler() {
+        return this._excessArgumentHandler;
+    }
+
+    /**
+     * Set custom option value processor
+     */
+    setOptionValueProcessor(processor) {
+        if (typeof processor !== 'function') {
+            throw new Error('Option value processor must be a function');
+        }
+        this._optionValueProcessor = processor;
+        return this;
+    }
+
+    /**
+     * Process option value through custom processor if available
+     * @private
+     */
+    _processOptionValue(option, value, source = 'cli') {
+        if (this._optionValueProcessor) {
+            try {
+                return this._optionValueProcessor(option, value, source);
+            } catch (error) {
+                throw new CommanderError(`Option value processor failed for ${option.flags}: ${error.message}`);
+            }
+        }
+        return value;
+    }
+
+    /**
      * Get current parsing configuration
      */
     getParsingConfig() {
@@ -607,7 +698,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
             combineFlagAndOptionalValue: this._combineFlagAndOptionalValue,
             storeOptionsAsProperties: this._storeOptionsAsProperties,
             showHelpAfterError: this._showHelpAfterError,
-            showSuggestionAfterError: this._showSuggestionAfterError
+            showSuggestionAfterError: this._showSuggestionAfterError,
+            positionalOptions: this._positionalOptions ? Object.fromEntries(this._positionalOptions) : {},
+            hasUnknownOptionHandler: !!this._unknownOptionHandler,
+            hasExcessArgumentHandler: !!this._excessArgumentHandler
         };
     }
 
@@ -646,6 +740,82 @@ Expecting one of '${allowedValues.join("', '")}'`);
 
         this._updateParsingConfigInWASM();
         return this;
+    }
+
+    /**
+     * Reset parsing configuration to defaults
+     */
+    resetParsingConfig() {
+        this._allowUnknownOption = false;
+        this._allowExcessArguments = false;
+        this._enablePositionalOptions = false;
+        this._passThroughOptions = false;
+        this._combineFlagAndOptionalValue = true;
+        this._storeOptionsAsProperties = false;
+        this._showHelpAfterError = false;
+        this._showSuggestionAfterError = true;
+        this._positionalOptions = null;
+        this._unknownOptionHandler = null;
+        this._excessArgumentHandler = null;
+        
+        this._updateParsingConfigInWASM();
+        return this;
+    }
+
+    /**
+     * Enable strict parsing mode (no unknown options, no excess arguments)
+     */
+    enableStrictParsing() {
+        this._allowUnknownOption = false;
+        this._allowExcessArguments = false;
+        this._passThroughOptions = false;
+        this._unknownOptionHandler = null;
+        this._excessArgumentHandler = null;
+        
+        this._updateParsingConfigInWASM();
+        return this;
+    }
+
+    /**
+     * Enable permissive parsing mode (allow unknown options and excess arguments)
+     */
+    enablePermissiveParsing() {
+        this._allowUnknownOption = true;
+        this._allowExcessArguments = true;
+        this._passThroughOptions = true;
+        
+        this._updateParsingConfigInWASM();
+        return this;
+    }
+
+    /**
+     * Configure argument separator handling
+     */
+    configureArgumentSeparator(options = {}) {
+        const {
+            stopOnDoubleDash = true,
+            treatAsArguments = true,
+            includeInArgs = false
+        } = options;
+        
+        this._argumentSeparatorConfig = {
+            stopOnDoubleDash,
+            treatAsArguments,
+            includeInArgs
+        };
+        
+        return this;
+    }
+
+    /**
+     * Get argument separator configuration
+     */
+    getArgumentSeparatorConfig() {
+        return this._argumentSeparatorConfig || {
+            stopOnDoubleDash: true,
+            treatAsArguments: true,
+            includeInArgs: false
+        };
     }
 
     storeOptionsAsProperties(storeAsProperties = true) {
@@ -705,9 +875,82 @@ Expecting one of '${allowedValues.join("', '")}'`);
         if ('suggestionGenerator' in configuration) {
             this._suggestionGenerator = configuration.suggestionGenerator;
         }
+        if ('errorPrefix' in configuration) {
+            this._errorPrefix = configuration.errorPrefix;
+        }
+        if ('errorSuffix' in configuration) {
+            this._errorSuffix = configuration.errorSuffix;
+        }
         
         this._configureErrorInWASM(configuration);
         return this;
+    }
+
+    /**
+     * Get error configuration
+     */
+    getErrorConfiguration() {
+        return { ...this._errorConfiguration };
+    }
+
+    /**
+     * Reset error configuration to defaults
+     */
+    resetErrorConfiguration() {
+        this._errorConfiguration = {};
+        this._showHelpAfterError = false;
+        this._showSuggestionAfterError = true;
+        this._exitCallback = null;
+        this._suggestionGenerator = null;
+        this._errorPrefix = '';
+        this._errorSuffix = '';
+        return this;
+    }
+
+    /**
+     * Set error message formatting
+     */
+    setErrorFormat(options = {}) {
+        const {
+            prefix = 'error: ',
+            suffix = '',
+            includeCommand = false,
+            includeTimestamp = false
+        } = options;
+        
+        this._errorPrefix = prefix;
+        this._errorSuffix = suffix;
+        this._errorIncludeCommand = includeCommand;
+        this._errorIncludeTimestamp = includeTimestamp;
+        
+        return this;
+    }
+
+    /**
+     * Format error message according to configuration
+     * @private
+     */
+    _formatErrorMessage(message) {
+        let formatted = message;
+        
+        if (this._errorPrefix) {
+            formatted = this._errorPrefix + formatted;
+        }
+        
+        if (this._errorIncludeCommand && this._name) {
+            formatted = `[${this._name}] ${formatted}`;
+        }
+        
+        if (this._errorIncludeTimestamp) {
+            const timestamp = new Date().toISOString();
+            formatted = `${timestamp} ${formatted}`;
+        }
+        
+        if (this._errorSuffix) {
+            formatted = formatted + this._errorSuffix;
+        }
+        
+        return formatted;
     }
 
     /**
@@ -732,6 +975,41 @@ Expecting one of '${allowedValues.join("', '")}'`);
         
         // Default suggestion logic
         return this._generateDefaultSuggestion(unknownCommand);
+    }
+
+    /**
+     * Generate suggestion for unknown option
+     */
+    generateOptionSuggestion(unknownOption) {
+        if (this.options.length === 0) {
+            return '';
+        }
+
+        const cleanOption = unknownOption.replace(/^-+/, '');
+        
+        // Find options that start with the same letter or are similar
+        for (const option of this.options) {
+            const longName = option.long ? option.long.replace(/^--/, '') : '';
+            const shortName = option.short ? option.short.replace(/^-/, '') : '';
+            
+            if (longName && (longName.startsWith(cleanOption) || cleanOption.startsWith(longName[0]))) {
+                return `Did you mean '${option.long}'?`;
+            }
+            if (shortName && cleanOption === shortName) {
+                return `Did you mean '${option.short}'?`;
+            }
+        }
+
+        // If no similar option found, suggest available options
+        if (this.options.length <= 5) {
+            const optionNames = this.options
+                .filter(opt => !opt.hidden)
+                .map(opt => opt.long || opt.short)
+                .filter(Boolean);
+            return `Available options: ${optionNames.join(', ')}`;
+        }
+
+        return 'Use --help to see available options';
     }
 
     /**
@@ -778,6 +1056,89 @@ Expecting one of '${allowedValues.join("', '")}'`);
      */
     outputError(str) {
         this._outputConfiguration.outputError(str, this._outputConfiguration.writeErr);
+    }
+
+    /**
+     * Get output configuration
+     */
+    getOutputConfiguration() {
+        return { ...this._outputConfiguration };
+    }
+
+    /**
+     * Reset output configuration to defaults
+     */
+    resetOutputConfiguration() {
+        this._outputConfiguration = {
+            writeOut: (str) => this._streamInterface.write(str),
+            writeErr: (str) => this._streamInterface.writeError(str),
+            outputError: (str, write) => write(str),
+            getOutHelpWidth: () => this._streamInterface.dimensions.output?.columns,
+            getErrHelpWidth: () => this._streamInterface.dimensions.error?.columns,
+            getOutHasColors: () => this._streamInterface.hasColors.output,
+            getErrHasColors: () => this._streamInterface.hasColors.error,
+            stripColor: (str) => str
+        };
+        return this;
+    }
+
+    /**
+     * Configure output streams
+     */
+    configureStreams(options = {}) {
+        const {
+            stdout = process.stdout,
+            stderr = process.stderr,
+            stdin = process.stdin
+        } = options;
+        
+        this._streamInterface = nodeJSIntegration.createStreamInterface({
+            stdout,
+            stderr,
+            stdin
+        });
+        
+        // Update output configuration to use new streams
+        this._outputConfiguration.writeOut = (str) => this._streamInterface.write(str);
+        this._outputConfiguration.writeErr = (str) => this._streamInterface.writeError(str);
+        
+        return this;
+    }
+
+    /**
+     * Enable or disable color output
+     */
+    configureColors(options = {}) {
+        const {
+            stdout = true,
+            stderr = true,
+            forceColor = false,
+            noColor = false
+        } = options;
+        
+        if (noColor) {
+            this._outputConfiguration.getOutHasColors = () => false;
+            this._outputConfiguration.getErrHasColors = () => false;
+        } else if (forceColor) {
+            this._outputConfiguration.getOutHasColors = () => true;
+            this._outputConfiguration.getErrHasColors = () => true;
+        } else {
+            this._outputConfiguration.getOutHasColors = () => stdout && this._streamInterface.hasColors.output;
+            this._outputConfiguration.getErrHasColors = () => stderr && this._streamInterface.hasColors.error;
+        }
+        
+        return this;
+    }
+
+    /**
+     * Set custom color stripping function
+     */
+    setColorStripper(stripperFn) {
+        if (typeof stripperFn !== 'function') {
+            throw new Error('Color stripper must be a function');
+        }
+        this._outputConfiguration.stripColor = stripperFn;
+        return this;
     }
 
     helpGroup(heading) {
@@ -858,6 +1219,9 @@ Expecting one of '${allowedValues.join("', '")}'`);
     async executeHooks(event, actionCommand = this) {
         const hooks = this._lifeCycleHooks[event] || [];
         
+        // Emit lifecycle event for external listeners
+        this.emit(event, this, actionCommand);
+        
         for (const hook of hooks) {
             try {
                 if (typeof hook === 'function') {
@@ -870,6 +1234,73 @@ Expecting one of '${allowedValues.join("', '")}'`);
         
         // Also execute hooks in WASM if available
         await this._executeHooksInWASM(event, actionCommand);
+    }
+
+    /**
+     * Execute hooks synchronously (for compatibility with synchronous parsing)
+     * @private
+     */
+    _executeHooksSync(event, actionCommand = this) {
+        const hooks = this._lifeCycleHooks[event] || [];
+        
+        // Emit lifecycle event for external listeners
+        this.emit(event, this, actionCommand);
+        
+        for (const hook of hooks) {
+            try {
+                if (typeof hook === 'function') {
+                    // Call hook synchronously - if it returns a promise, we ignore it
+                    const result = hook(this, actionCommand);
+                    // If the hook is async but we're in sync mode, warn the user
+                    if (result && typeof result.then === 'function') {
+                        console.warn(`Warning: Async hook detected in synchronous context for event '${event}'. Use parseAsync() for async hooks.`);
+                    }
+                }
+            } catch (error) {
+                throw new Error(`${event} hook failed: ${error.message}`);
+            }
+        }
+    }
+
+    /**
+     * Enhanced event emission for command lifecycle events
+     */
+    emitLifecycleEvent(event, data = {}) {
+        this.emit(event, {
+            command: this,
+            timestamp: new Date(),
+            ...data
+        });
+    }
+
+    /**
+     * Add event listener for command lifecycle events
+     */
+    onLifecycleEvent(event, listener) {
+        this.on(event, listener);
+        return this;
+    }
+
+    /**
+     * Remove event listener for command lifecycle events
+     */
+    offLifecycleEvent(event, listener) {
+        this.off(event, listener);
+        return this;
+    }
+
+    /**
+     * Get all registered event listeners for a specific event
+     */
+    getEventListeners(event) {
+        return this.listeners(event);
+    }
+
+    /**
+     * Check if there are any listeners for a specific event
+     */
+    hasEventListeners(event) {
+        return this.listenerCount(event) > 0;
     }
 
     exitOverride(fn) {
@@ -1264,7 +1695,37 @@ Expecting one of '${allowedValues.join("', '")}'`);
 
         if (this._actionHandler) {
             this._processArguments();
-            return this._actionHandler(this.processedArgs);
+            
+            // Execute pre-action hooks
+            try {
+                this._executeHooksSync('preAction', this);
+            } catch (error) {
+                this.error(`Pre-action hook failed: ${error.message}`);
+            }
+            
+            try {
+                // Execute the action
+                const result = this._actionHandler(this.processedArgs);
+                
+                // Execute post-action hooks
+                try {
+                    this._executeHooksSync('postAction', this);
+                } catch (hookError) {
+                    // Log hook error but don't fail the action
+                    console.warn('Post-action hook failed:', hookError.message);
+                }
+                
+                return result;
+            } catch (error) {
+                // Still execute post-action hooks even if action failed
+                try {
+                    this._executeHooksSync('postAction', this);
+                } catch (hookError) {
+                    // Log hook error but throw original action error
+                    console.warn('Post-action hook failed:', hookError.message);
+                }
+                throw error;
+            }
         }
 
         // Fallback to JavaScript parsing if WASM not available
@@ -1284,15 +1745,12 @@ Expecting one of '${allowedValues.join("', '")}'`);
             return;
         }
 
-        // Execute pre-subcommand hook if present
-        if (this._lifeCycleHooks.preSubcommand) {
-            for (const hook of this._lifeCycleHooks.preSubcommand) {
-                try {
-                    hook(this, subCommand);
-                } catch (error) {
-                    this.error(`Pre-subcommand hook failed: ${error.message}`);
-                }
-            }
+        // Execute pre-subcommand hooks
+        try {
+            // Use synchronous version of executeHooks for consistency
+            this._executeHooksSync('preSubcommand', subCommand);
+        } catch (error) {
+            this.error(`Pre-subcommand hook failed: ${error.message}`);
         }
 
         if (subCommand._executableHandler) {
@@ -1507,39 +1965,128 @@ Expecting one of '${allowedValues.join("', '")}'`);
             }
 
             // Parse arguments and options with enhanced processing
+            let stopOptionParsing = false;
+            
             for (let i = 0; i < argv.length; i++) {
                 const arg = argv[i];
 
-                if (arg.startsWith('-')) {
-                    // Handle options with enhanced processing
-                    const option = this._findOptionByFlag(arg);
+                // Handle double dash (--) separator - stop parsing options after this
+                if (arg === '--') {
+                    const separatorConfig = this.getArgumentSeparatorConfig();
                     
-                    if (option) {
-                        const flagName = this._extractFlagName(arg);
+                    if (separatorConfig.stopOnDoubleDash) {
+                        stopOptionParsing = true;
                         
-                        if (option.requiresValue && !option.optionalValue) {
-                            // Option requires a value
-                            if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-                                this._processOptionWithEnhancements(flagName, argv[++i], option);
-                            } else {
-                                throw new CommanderError(`Option ${arg} requires a value`);
-                            }
-                        } else if (option.optionalValue && i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-                            // Option has optional value and next arg is not a flag
-                            this._processOptionWithEnhancements(flagName, argv[++i], option);
-                        } else if (option.optionalValue) {
-                            // Optional value not provided, use preset or default
-                            const presetValue = option.presetArg !== undefined ? option.presetArg : 
-                                               (option.isBoolean() ? true : option.defaultValue);
-                            this._processOptionWithEnhancements(flagName, presetValue, option);
-                        } else {
-                            // Boolean option - handle negation properly
-                            const isNegated = option.negate && arg.includes('no-');
-                            const value = isNegated ? false : true;
-                            this._processOptionWithEnhancements(flagName, value, option);
+                        if (separatorConfig.includeInArgs) {
+                            args.push(arg);
                         }
+                        
+                        if (separatorConfig.treatAsArguments) {
+                            // Add all remaining arguments as regular arguments
+                            args.push(...argv.slice(i + 1));
+                        }
+                        break;
                     } else {
-                        // Handle unknown options with enhanced logic
+                        // Treat -- as a regular argument
+                        args.push(arg);
+                        continue;
+                    }
+                }
+
+                // If we've seen --, treat everything as regular arguments
+                if (stopOptionParsing) {
+                    args.push(arg);
+                    continue;
+                }
+
+                if (arg.startsWith('-') && arg.length > 1) {
+                    // Handle options with enhanced processing
+                    let processed = false;
+
+                    // Check for option with equals sign (--port=8080)
+                    if (arg.includes('=')) {
+                        const [flagPart, valuePart] = arg.split('=', 2);
+                        const option = this._findOptionByFlag(flagPart);
+                        
+                        if (option) {
+                            this._processOptionWithEnhancements(this._extractFlagName(flagPart), valuePart, option);
+                            processed = true;
+                        }
+                    }
+                    
+                    // Handle combined short options (-abc)
+                    else if (arg.startsWith('-') && !arg.startsWith('--') && arg.length > 2) {
+                        const flags = arg.slice(1); // Remove the leading '-'
+                        let allProcessed = true;
+                        
+                        for (let j = 0; j < flags.length; j++) {
+                            const flag = `-${flags[j]}`;
+                            const option = this._findOptionByFlag(flag);
+                            
+                            if (option) {
+                                if (option.requiresValue && !option.optionalValue) {
+                                    // If this option requires a value and it's the last flag in the group
+                                    if (j === flags.length - 1) {
+                                        // Check if next argument is the value
+                                        if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                                            this._processOptionWithEnhancements(flags[j], argv[++i], option);
+                                        } else {
+                                            throw new CommanderError(`Option ${flag} requires a value`);
+                                        }
+                                    } else {
+                                        throw new CommanderError(`Option ${flag} requires a value but is combined with other flags`);
+                                    }
+                                } else {
+                                    // Boolean option or optional value
+                                    const value = option.isBoolean() ? true : (option.presetArg !== undefined ? option.presetArg : true);
+                                    this._processOptionWithEnhancements(flags[j], value, option);
+                                }
+                            } else {
+                                allProcessed = false;
+                                break;
+                            }
+                        }
+                        
+                        if (allProcessed) {
+                            processed = true;
+                        }
+                    }
+                    
+                    // Handle regular options (single flag)
+                    if (!processed) {
+                        const option = this._findOptionByFlag(arg);
+                        
+                        if (option) {
+                            const flagName = this._extractFlagName(arg);
+                            
+                            // Handle negated boolean options (--no-color)
+                            if (option.negatable && arg.includes('no-')) {
+                                this._processOptionWithEnhancements(flagName, false, option);
+                            } else if (option.requiresValue && !option.optionalValue) {
+                                // Option requires a value
+                                if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                                    this._processOptionWithEnhancements(flagName, argv[++i], option);
+                                } else {
+                                    throw new CommanderError(`Option ${arg} requires a value`);
+                                }
+                            } else if (option.optionalValue && i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                                // Option has optional value and next arg is not a flag
+                                this._processOptionWithEnhancements(flagName, argv[++i], option);
+                            } else if (option.optionalValue) {
+                                // Optional value not provided, use preset or default
+                                const presetValue = option.presetArg !== undefined ? option.presetArg : 
+                                                   (option.isBoolean() ? true : option.defaultValue);
+                                this._processOptionWithEnhancements(flagName, presetValue, option);
+                            } else {
+                                // Boolean option
+                                this._processOptionWithEnhancements(flagName, true, option);
+                            }
+                            processed = true;
+                        }
+                    }
+                    
+                    // Handle unknown options
+                    if (!processed) {
                         let handled = false;
                         
                         if (this._unknownOptionHandler) {
@@ -1821,7 +2368,8 @@ Expecting one of '${allowedValues.join("', '")}'`);
 
     // Error handling methods
     error(message, errorOptions = {}) {
-        this.outputError(`${message}\n`);
+        const formattedMessage = this._formatErrorMessage(message);
+        this.outputError(`${formattedMessage}\n`);
         
         if (typeof this._showHelpAfterError === 'string') {
             this.writeErr(`${this._showHelpAfterError}\n`);
@@ -1858,10 +2406,15 @@ Expecting one of '${allowedValues.join("', '")}'`);
     }
 
     unknownOption(flag) {
+        let message = `error: unknown option '${flag}'`;
+        
         if (this._showSuggestionAfterError) {
-            // Add suggestion logic here if needed
+            const suggestion = this.generateOptionSuggestion(flag);
+            if (suggestion) {
+                message += `\n${suggestion}`;
+            }
         }
-        const message = `error: unknown option '${flag}'`;
+        
         this.error(message, { code: 'commander.unknownOption' });
     }
 
@@ -1902,20 +2455,44 @@ Expecting one of '${allowedValues.join("', '")}'`);
      */
     _processOptionWithEnhancements(flagName, value, option) {
         try {
+            // Handle negatable options - determine if this is the negated form
+            let finalValue = value;
+            if (option.negatable) {
+                // Check if the flag name indicates negation
+                if (flagName.includes('no-') || value === false) {
+                    finalValue = false;
+                } else if (option.isBoolean()) {
+                    finalValue = true;
+                }
+            }
+            
             // Handle variadic options specially
             if (option.variadic) {
                 const currentValue = this.getOptionValue(option.attributeName());
-                const newValue = option._collectValue(value, currentValue);
+                const newValue = option._collectValue(finalValue, currentValue);
                 this.setOptionValueWithSource(option.attributeName(), newValue, 'cli');
-                this._optionProcessor.processOption(flagName, value);
-            } else {
-                // Process through option processor for validation and parsing
-                this._optionProcessor.processOption(flagName, value);
                 
-                // Also update command's internal state
-                const processedValue = option.parseArg ? 
-                    option.parseArg(value, this.getOptionValue(option.attributeName())) : value;
+                // Process through option processor if available
+                if (this._optionProcessor && this._optionProcessor.processOption) {
+                    this._optionProcessor.processOption(flagName, finalValue);
+                }
+            } else {
+                // Process through option processor for validation and parsing if available
+                if (this._optionProcessor && this._optionProcessor.processOption) {
+                    this._optionProcessor.processOption(flagName, finalValue);
+                }
+                
+                // Apply custom parser if available
+                let processedValue = finalValue;
+                if (option.parseArg && finalValue !== undefined && finalValue !== null) {
+                    processedValue = option.parseArg(finalValue, this.getOptionValue(option.attributeName()));
+                }
+                
+                // Update command's internal state
                 this.setOptionValueWithSource(option.attributeName(), processedValue, 'cli');
+                
+                // Emit option event for compatibility
+                this.emit(`option:${option.name()}`, processedValue);
             }
         } catch (error) {
             throw new CommanderError(`Error processing option ${flagName}: ${error.message}`);
@@ -1944,12 +2521,34 @@ Expecting one of '${allowedValues.join("', '")}'`);
         
         for (const option of this.options) {
             // Check if option matches the flag
-            if (option.is(flag) || 
-                option.long === `--${cleanFlag}` || 
-                option.short === `-${cleanFlag}` ||
-                (option.long && option.long.replace(/^--/, '') === cleanFlag) ||
+            if (option.is(flag)) {
+                return option;
+            }
+            
+            // Check direct matches
+            if (option.long === flag || option.short === flag) {
+                return option;
+            }
+            
+            // Check clean flag matches
+            if ((option.long && option.long.replace(/^--/, '') === cleanFlag) ||
                 (option.short && option.short.replace(/^-/, '') === cleanFlag)) {
                 return option;
+            }
+            
+            // Handle negatable options - check if this is a negated version
+            if (option.negatable && option.long) {
+                const baseName = option.long.replace(/^--/, '');
+                
+                // Check for --no-xxx format
+                if (flag === `--no-${baseName}` || cleanFlag === `no-${baseName}`) {
+                    return option;
+                }
+                
+                // Check if the option itself is defined as --no-xxx and we're looking for the positive version
+                if (option.long.startsWith('--no-') && flag === `--${baseName.replace(/^no-/, '')}`) {
+                    return option;
+                }
             }
         }
         return null;

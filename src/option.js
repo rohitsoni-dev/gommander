@@ -128,6 +128,42 @@ class Option {
     return this;
   }
 
+  // Additional setter methods for enhanced API compatibility
+  setEnv(name) {
+    return this.env(name);
+  }
+
+  setConflicts(names) {
+    return this.conflicts(names);
+  }
+
+  setImplies(names) {
+    return this.implies(names);
+  }
+
+  setHidden(hidden = true) {
+    return this.hideHelp(hidden);
+  }
+
+  setChoices(values) {
+    return this.choices(values);
+  }
+
+  setDefault(value) {
+    return this.default(value);
+  }
+
+  setRequired(required = true) {
+    this.required = required;
+    this.requiresValue = required;
+    return this;
+  }
+
+  setVariadic(variadic = true) {
+    this.variadic = variadic;
+    return this;
+  }
+
   // Commander.js API methods
   name() {
     if (this.long) {

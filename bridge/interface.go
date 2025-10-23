@@ -675,6 +675,30 @@ func setPostAction(args []js.Value) (any, error) {
 	}, nil
 }
 
+// setPreSubcommand sets the pre-subcommand hook for a command
+func setPreSubcommand(args []js.Value) (any, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("commandId is required")
+	}
+
+	commandID := args[0].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	// Store a placeholder pre-subcommand handler
+	command.PreSubcommand = func(thisCommand *cmd.Command, subcommand *cmd.Command) error {
+		// This would call back to JavaScript
+		return nil
+	}
+
+	return map[string]any{
+		"preSubcommandSet": true,
+	}, nil
+}
+
 // executeAction executes the action for a command
 func executeAction(args []js.Value) (any, error) {
 	if len(args) < 3 {
@@ -1095,7 +1119,7 @@ func cloneArgument(source *cmd.Argument) *cmd.Argument {
 	return clone
 }
 
-func getSubcommandInfo(result *cmd.ParseResult) map[string]any {
+func getSubcommandInfoFromResult(result *cmd.ParseResult) map[string]any {
 	if result.Command == nil {
 		return nil
 	}
