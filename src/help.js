@@ -3,6 +3,7 @@ class Help {
     this.helpWidth = undefined;
     this.sortSubcommands = false;
     this.sortOptions = false;
+    this.showGlobalOptions = false;
   }
 
   // Configure help display
@@ -21,22 +22,27 @@ class Help {
 
   // Get the command usage string
   commandUsage(cmd) {
+    // Use custom usage if set
+    if (cmd._usage) {
+      return cmd._usage;
+    }
+
     let usage = cmd.name();
     
     // Add options placeholder
-    if (cmd._options && cmd._options.length > 0) {
+    if (cmd.options && cmd.options.length > 0) {
       usage += ' [options]';
     }
     
     // Add arguments
-    if (cmd._arguments && cmd._arguments.length > 0) {
-      for (const arg of cmd._arguments) {
-        usage += ' ' + arg.helpText().split('  ')[0]; // Just the name part
+    if (cmd.registeredArguments && cmd.registeredArguments.length > 0) {
+      for (const arg of cmd.registeredArguments) {
+        usage += ' ' + arg.humanReadableArgName();
       }
     }
     
     // Add subcommands placeholder
-    if (cmd._commands && cmd._commands.length > 0) {
+    if (cmd.commands && cmd.commands.length > 0) {
       usage += ' [command]';
     }
     
@@ -65,8 +71,11 @@ class Help {
 
   // Format help for a command
   formatHelp(cmd, helper) {
-    const termWidth = this.helpWidth || this.getTerminalWidth();
+    const termWidth = this.padWidth(cmd, helper);
     let output = '';
+    
+    // Emit beforeAll help event
+    cmd.emit('beforeAllHelp', { command: cmd, error: false });
     
     // Usage
     output += 'Usage: ' + this.commandUsage(cmd) + '\n';
@@ -77,80 +86,90 @@ class Help {
       output += '\n' + description + '\n';
     }
     
+    // Emit before help event
+    cmd.emit('beforeHelp', { command: cmd, error: false });
+    
     // Arguments
-    if (cmd._arguments && cmd._arguments.length > 0) {
+    if (cmd.registeredArguments && cmd.registeredArguments.length > 0) {
       output += '\nArguments:\n';
-      for (const arg of cmd._arguments) {
-        const argHelp = this.argumentDescription(arg);
-        output += '  ' + this.padWidth(argHelp, termWidth) + '\n';
+      const maxArgWidth = Math.max(...cmd.registeredArguments.map(arg => 
+        arg.humanReadableArgName().length));
+      
+      for (const arg of cmd.registeredArguments) {
+        const name = arg.humanReadableArgName().padEnd(maxArgWidth);
+        const desc = arg.description || '';
+        output += `  ${name}  ${desc}\n`;
       }
     }
     
     // Options
-    if (cmd._options && cmd._options.length > 0) {
-      let options = cmd._options.slice();
-      if (this.sortOptions) {
-        options.sort((a, b) => a.flags.localeCompare(b.flags));
-      }
-      
+    const visibleOptions = this.visibleOptions(cmd);
+    if (visibleOptions.length > 0) {
       output += '\nOptions:\n';
-      for (const option of options) {
-        if (!option.hidden) {
-          const optionHelp = this.optionDescription(option);
-          output += '  ' + this.padWidth(optionHelp, termWidth) + '\n';
-        }
+      const maxFlagWidth = Math.max(...visibleOptions.map(opt => opt.flags.length));
+      
+      for (const option of visibleOptions) {
+        const flags = option.flags.padEnd(maxFlagWidth);
+        const desc = option.description || '';
+        output += `  ${flags}  ${desc}\n`;
       }
     }
     
     // Commands
-    if (cmd._commands && cmd._commands.length > 0) {
-      let commands = cmd._commands.slice();
-      if (this.sortSubcommands) {
-        commands.sort((a, b) => a.name().localeCompare(b.name()));
-      }
-      
+    const visibleCommands = this.visibleCommands(cmd);
+    if (visibleCommands.length > 0) {
       output += '\nCommands:\n';
-      for (const subCmd of commands) {
-        if (!subCmd._hidden) {
-          const name = subCmd.name();
-          const desc = this.subcommandDescription(subCmd);
-          const cmdLine = name + (desc ? '  ' + desc : '');
-          output += '  ' + this.padWidth(cmdLine, termWidth) + '\n';
-        }
+      const maxNameWidth = Math.max(...visibleCommands.map(cmd => cmd.name().length));
+      
+      for (const subCmd of visibleCommands) {
+        const name = subCmd.name().padEnd(maxNameWidth);
+        const desc = this.subcommandDescription(subCmd);
+        output += `  ${name}  ${desc}\n`;
       }
     }
+    
+    // Emit after help event
+    cmd.emit('afterHelp', { command: cmd, error: false });
+    
+    // Emit afterAll help event
+    cmd.emit('afterAllHelp', { command: cmd, error: false });
     
     return output;
   }
 
-  // Pad text to specified width
-  padWidth(str, width) {
-    const maxWidth = width || 80;
-    if (str.length <= maxWidth) {
-      return str;
+  // Get visible options for help display
+  visibleOptions(cmd) {
+    let options = cmd.options.filter(option => !option.hidden);
+    if (this.sortOptions) {
+      options.sort((a, b) => a.flags.localeCompare(b.flags));
+    }
+    return options;
+  }
+
+  // Get visible commands for help display
+  visibleCommands(cmd) {
+    let commands = cmd.commands.filter(cmd => !cmd._hidden);
+    if (this.sortSubcommands) {
+      commands.sort((a, b) => a.name().localeCompare(b.name()));
+    }
+    return commands;
+  }
+
+  // Calculate padding width for help display
+  padWidth(cmd, helper) {
+    if (this.helpWidth !== undefined) {
+      return this.helpWidth;
     }
     
-    // Simple word wrapping
-    const words = str.split(' ');
-    let line = '';
-    let result = '';
-    
-    for (const word of words) {
-      if (line.length + word.length + 1 <= maxWidth) {
-        line += (line ? ' ' : '') + word;
-      } else {
-        if (result) result += '\n  ';
-        result += line;
-        line = word;
+    // Use output configuration to get width
+    if (cmd._outputConfiguration && cmd._outputConfiguration.getOutHelpWidth) {
+      const width = cmd._outputConfiguration.getOutHelpWidth();
+      if (width !== undefined) {
+        return width;
       }
     }
     
-    if (line) {
-      if (result) result += '\n  ';
-      result += line;
-    }
-    
-    return result;
+    return this.getTerminalWidth();
   }
 
   // Get terminal width
@@ -193,4 +212,10 @@ class Help {
   }
 }
 
-module.exports = { Help };
+// Utility function to strip ANSI color codes
+function stripColor(str) {
+  // Remove ANSI escape sequences
+  return str.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+module.exports = { Help, stripColor };

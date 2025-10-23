@@ -1,6 +1,6 @@
 class Argument {
   constructor(name, description) {
-    this.name = name;
+    this._name = name;
     this.description = description || '';
     this.required = true;
     this.variadic = false;
@@ -13,7 +13,7 @@ class Argument {
 
   _parseName() {
     // Parse argument name like "<file>", "[file]", "<files...>"
-    let name = this.name;
+    let name = this._name;
     
     // Check for optional argument [name]
     if (name.startsWith('[') && name.endsWith(']')) {
@@ -33,7 +33,7 @@ class Argument {
       name = name.slice(0, -3);
     }
     
-    this.name = name;
+    this._name = name;
   }
 
   default(value) {
@@ -60,6 +60,11 @@ class Argument {
   argOptional() {
     this.required = false;
     return this;
+  }
+
+  // Commander.js API methods
+  name() {
+    return this._name;
   }
 
   // Parse the argument value
@@ -106,7 +111,7 @@ class Argument {
 
   // Get help text for this argument
   helpText() {
-    let text = this.name;
+    let text = this._name;
     
     if (this.variadic) {
       text += '...';
@@ -131,6 +136,15 @@ class Argument {
     }
     
     return text;
+  }
+
+  // Commander.js compatibility method
+  humanReadableArgName() {
+    let name = this._name;
+    if (this.variadic) {
+      name += '...';
+    }
+    return this.required ? `<${name}>` : `[${name}]`;
   }
 }
 
