@@ -254,6 +254,13 @@ Expecting one of '${allowedValues.join("', '")}'`);
     }
 
     addOption(option) {
+        // Check if this exact option is already added
+        const existingIndex = this.options.findIndex(existing => existing === option);
+        if (existingIndex !== -1) {
+            // Option already exists, just return
+            return this;
+        }
+        
         this._registerOption(option);
 
         const oname = option.name();
@@ -273,8 +280,21 @@ Expecting one of '${allowedValues.join("', '")}'`);
             this.setOptionValueWithSource(name, option.defaultValue, 'default');
         }
 
-        // Handler for cli and env supplied values
+        // Handler for cli and env supplied values with enhanced precedence
         const handleOptionValue = (val, invalidValueMessage, valueSource) => {
+            // Check precedence: CLI > Environment > Default
+            const currentSource = this.getOptionValueSource(name);
+            
+            // Don't override CLI values with environment values
+            if (valueSource === 'env' && currentSource === 'cli') {
+                return;
+            }
+            
+            // Don't override CLI or env values with defaults
+            if (valueSource === 'default' && (currentSource === 'cli' || currentSource === 'env')) {
+                return;
+            }
+
             if (val == null && option.presetArg !== undefined) {
                 val = option.presetArg;
             }
@@ -303,7 +323,27 @@ Expecting one of '${allowedValues.join("', '")}'`);
             handleOptionValue(val, invalidValueMessage, 'cli');
         });
 
+        // Enhanced environment variable handling
         if (option.envVar) {
+            // Check environment variable immediately and set if present
+            if (process.env[option.envVar] !== undefined) {
+                const envValue = process.env[option.envVar];
+                const invalidValueMessage = `error: option '${option.flags}' value '${envValue}' from env '${option.envVar}' is invalid.`;
+                
+                try {
+                    handleOptionValue(envValue, invalidValueMessage, 'env');
+                } catch (error) {
+                    // Store the error but don't throw immediately - let validation handle it
+                    this._envVarErrors = this._envVarErrors || [];
+                    this._envVarErrors.push({
+                        option: option.flags,
+                        envVar: option.envVar,
+                        value: envValue,
+                        error: error.message
+                    });
+                }
+            }
+            
             this.on('optionEnv:' + oname, (val) => {
                 const invalidValueMessage = `error: option '${option.flags}' value '${val}' from env '${option.envVar}' is invalid.`;
                 handleOptionValue(val, invalidValueMessage, 'env');
@@ -315,6 +355,12 @@ Expecting one of '${allowedValues.join("', '")}'`);
         this.options.push(option);
         this._optionProcessor.addOption(option);
 
+        // Auto-generate environment variable if enabled
+        if (this._autoEnv && !option.envVar) {
+            const envName = this._generateEnvVarName(option, this._envPrefix);
+            option.env(envName);
+        }
+
         // Add to WASM if available
         this._addOptionToWASM(option);
 
@@ -322,16 +368,49 @@ Expecting one of '${allowedValues.join("', '")}'`);
     }
 
     _registerOption(option) {
-        const matchingOption =
-            (option.short && this._findOption(option.short)) ||
-            (option.long && this._findOption(option.long));
-        if (matchingOption) {
-            const matchingFlag =
-                option.long && this._findOption(option.long)
-                    ? option.long
-                    : option.short;
-            throw new Error(`Cannot add option '${option.flags}'${this._name && ` to command '${this._name}'`} due to conflicting flag '${matchingFlag}'
--  already used by option '${matchingOption.flags}'`);
+        // Check for direct flag conflicts, but allow if it's the exact same option being re-added
+        const shortConflict = option.short && this._findOption(option.short);
+        const longConflict = option.long && this._findOption(option.long);
+        
+        if (shortConflict && shortConflict !== option) {
+            throw new Error(`Cannot add option '${option.flags}'${this._name && ` to command '${this._name}'`} due to conflicting short flag '${option.short}'
+-  already used by option '${shortConflict.flags}'`);
+        }
+        
+        if (longConflict && longConflict !== option) {
+            throw new Error(`Cannot add option '${option.flags}'${this._name && ` to command '${this._name}'`} due to conflicting long flag '${option.long}'
+-  already used by option '${longConflict.flags}'`);
+        }
+        
+        // Check for negatable option conflicts only if both options are explicitly negatable
+        if (option.negatable && option.long) {
+            const baseName = option.long.replace(/^--/, '');
+            
+            if (baseName.startsWith('no-')) {
+                // This is a --no-xxx option, check for positive version
+                const positiveName = baseName.substring(3);
+                const positiveConflict = this._findOption(`--${positiveName}`);
+                if (positiveConflict && positiveConflict.negatable && positiveConflict !== option) {
+                    throw new Error(`Cannot add negatable option '${option.flags}'${this._name && ` to command '${this._name}'`} due to conflict with existing negatable option '${positiveConflict.flags}'`);
+                }
+            } else {
+                // This is a positive option, check for --no-xxx version only if it's explicitly negatable
+                const negativeConflict = this._findOption(`--no-${baseName}`);
+                if (negativeConflict && negativeConflict.negatable && negativeConflict !== option) {
+                    throw new Error(`Cannot add negatable option '${option.flags}'${this._name && ` to command '${this._name}'`} due to conflict with existing negatable option '${negativeConflict.flags}'`);
+                }
+            }
+        }
+        
+        // Check for attribute name conflicts (for option value storage), but allow same option
+        const attributeName = option.attributeName();
+        const attributeConflict = this.options.find(existingOption => 
+            existingOption.attributeName() === attributeName && existingOption !== option
+        );
+        
+        if (attributeConflict) {
+            throw new Error(`Cannot add option '${option.flags}'${this._name && ` to command '${this._name}'`} due to conflicting attribute name '${attributeName}'
+-  already used by option '${attributeConflict.flags}'`);
         }
     }
 
@@ -1480,8 +1559,9 @@ Expecting one of '${allowedValues.join("', '")}'`);
         return this.addOption(option);
     }
 
-    negatableOption(flags, description) {
+    negatableOption(flags, description, defaultValue = true) {
         const option = Option.createNegatable(flags, description);
+        option.default(defaultValue);
         
         return this.addOption(option);
     }
@@ -1489,6 +1569,73 @@ Expecting one of '${allowedValues.join("', '")}'`);
     variadicOption(flags, description, defaultValue = []) {
         const option = Option.createVariadic(flags, description);
         option.default(defaultValue);
+        
+        return this.addOption(option);
+    }
+
+    /**
+     * Create a variadic option with custom separator
+     */
+    variadicOptionWithSeparator(flags, description, separator = ',', defaultValue = []) {
+        const option = Option.createVariadic(flags, description);
+        option.default(defaultValue);
+        
+        // Add custom parser to handle separator
+        const originalParser = option.parseArg;
+        option.argParser((value, previous) => {
+            // Split by separator if it's a string
+            if (typeof value === 'string' && value.includes(separator)) {
+                const values = value.split(separator).map(v => v.trim()).filter(v => v.length > 0);
+                
+                // Apply original parser to each value if it exists
+                if (originalParser) {
+                    return values.map(v => originalParser(v, undefined));
+                }
+                
+                return values;
+            }
+            
+            // Single value - apply original parser if it exists
+            if (originalParser) {
+                return originalParser(value, previous);
+            }
+            
+            return value;
+        });
+        
+        return this.addOption(option);
+    }
+
+    /**
+     * Create a variadic option with min/max count validation
+     */
+    variadicOptionWithCount(flags, description, minCount = 0, maxCount = Infinity, defaultValue = []) {
+        const option = Option.createVariadic(flags, description);
+        option.default(defaultValue);
+        
+        // Add validation for count
+        const originalParser = option.parseArg;
+        option.argParser((value, previous) => {
+            let result = value;
+            
+            // Apply original parser if it exists
+            if (originalParser) {
+                result = originalParser(value, previous);
+            }
+            
+            // Ensure result is an array for count validation
+            const finalArray = Array.isArray(result) ? result : [result];
+            
+            if (finalArray.length < minCount) {
+                throw new Error(`Option ${flags} requires at least ${minCount} value(s), got ${finalArray.length}`);
+            }
+            
+            if (finalArray.length > maxCount) {
+                throw new Error(`Option ${flags} accepts at most ${maxCount} value(s), got ${finalArray.length}`);
+            }
+            
+            return result;
+        });
         
         return this.addOption(option);
     }
@@ -1504,6 +1651,103 @@ Expecting one of '${allowedValues.join("', '")}'`);
 
     customOption(flags, description, parser, defaultValue) {
         const option = Option.createWithParser(flags, description, parser);
+        if (defaultValue !== undefined) {
+            option.default(defaultValue);
+        }
+        
+        return this.addOption(option);
+    }
+
+    /**
+     * Create option with validation function
+     */
+    validatedOption(flags, description, validator, defaultValue) {
+        const option = new Option(flags, description);
+        
+        // Create a parser that includes validation
+        const validatingParser = (value, previous) => {
+            try {
+                const result = validator(value, previous);
+                
+                if (result === false) {
+                    throw new Error(`Validation failed for value: ${value}`);
+                }
+                
+                if (typeof result === 'object' && result !== null) {
+                    if (result.valid === false) {
+                        throw new Error(result.message || `Validation failed for value: ${value}`);
+                    }
+                    return result.value !== undefined ? result.value : value;
+                }
+                
+                return typeof result === 'undefined' ? value : result;
+            } catch (error) {
+                throw new Error(`Validation failed for option ${flags}: ${error.message}`);
+            }
+        };
+        
+        option.argParser(validatingParser);
+        
+        if (defaultValue !== undefined) {
+            option.default(defaultValue);
+        }
+        
+        return this.addOption(option);
+    }
+
+    /**
+     * Create option with transformation function
+     */
+    transformedOption(flags, description, transformer, defaultValue) {
+        const option = new Option(flags, description);
+        
+        const transformingParser = (value, previous) => {
+            try {
+                return transformer(value, previous);
+            } catch (error) {
+                throw new Error(`Transformation failed for option ${flags}: ${error.message}`);
+            }
+        };
+        
+        option.argParser(transformingParser);
+        
+        if (defaultValue !== undefined) {
+            option.default(defaultValue);
+        }
+        
+        return this.addOption(option);
+    }
+
+    /**
+     * Create option with async validation (for parseAsync)
+     */
+    asyncValidatedOption(flags, description, asyncValidator, defaultValue) {
+        const option = new Option(flags, description);
+        
+        const asyncValidatingParser = async (value, previous) => {
+            try {
+                const result = await asyncValidator(value, previous);
+                
+                if (result === false) {
+                    throw new Error(`Async validation failed for value: ${value}`);
+                }
+                
+                if (typeof result === 'object' && result !== null) {
+                    if (result.valid === false) {
+                        throw new Error(result.message || `Async validation failed for value: ${value}`);
+                    }
+                    return result.value !== undefined ? result.value : value;
+                }
+                
+                return typeof result === 'undefined' ? value : result;
+            } catch (error) {
+                throw new Error(`Async validation failed for option ${flags}: ${error.message}`);
+            }
+        };
+        
+        option.argParser(asyncValidatingParser);
+        option._isAsync = true; // Mark as async for special handling
+        
         if (defaultValue !== undefined) {
             option.default(defaultValue);
         }
@@ -2145,6 +2389,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
             // Enhanced validation with option groups and custom validators
             this._optionProcessor.validate();
             this._validateOptionConstraints();
+            this._validateEnvironmentVariables();
 
             // Handle excess arguments if needed
             if (args.length > this.registeredArguments.length && !this._allowExcessArguments) {
@@ -2479,13 +2724,23 @@ Expecting one of '${allowedValues.join("', '")}'`);
             } else {
                 // Process through option processor for validation and parsing if available
                 if (this._optionProcessor && this._optionProcessor.processOption) {
-                    this._optionProcessor.processOption(flagName, finalValue);
+                    try {
+                        this._optionProcessor.processOption(flagName, finalValue);
+                        // Get the processed value from the option processor
+                        const processorValue = this._optionProcessor.getValue(option.attributeName());
+                        if (processorValue !== undefined) {
+                            processedValue = processorValue;
+                        }
+                    } catch (error) {
+                        throw new CommanderError(`Option processor failed for ${flagName}: ${error.message}`);
+                    }
                 }
                 
                 // Apply custom parser if available
                 let processedValue = finalValue;
                 if (option.parseArg && finalValue !== undefined && finalValue !== null) {
-                    processedValue = option.parseArg(finalValue, this.getOptionValue(option.attributeName()));
+                    const currentValue = this.getOptionValue(option.attributeName());
+                    processedValue = option.parseArg(finalValue, currentValue);
                 }
                 
                 // Update command's internal state
@@ -2555,23 +2810,65 @@ Expecting one of '${allowedValues.join("', '")}'`);
     }
 
     /**
+     * Validate environment variables
+     * @private
+     */
+    _validateEnvironmentVariables() {
+        // Check for environment variable errors that were stored during option processing
+        if (this._envVarErrors && this._envVarErrors.length > 0) {
+            const errorMessages = this._envVarErrors.map(err => 
+                `Environment variable ${err.envVar} for ${err.option}: ${err.error}`
+            );
+            throw new CommanderError(`Environment variable validation failed:\n${errorMessages.join('\n')}`);
+        }
+        
+        // Validate current environment variables
+        const envErrors = this.validateEnvVars();
+        if (envErrors.length > 0) {
+            const errorMessages = envErrors.map(err => 
+                `Environment variable ${err.envVar} for ${err.option}: ${err.error}`
+            );
+            throw new CommanderError(`Environment variable validation failed:\n${errorMessages.join('\n')}`);
+        }
+        
+        // Check required options with environment variable support
+        const missingRequired = this.checkRequiredWithEnv();
+        if (missingRequired.length > 0) {
+            const errorMessages = missingRequired.map(missing => {
+                let msg = `Missing required option: ${missing.option}`;
+                if (missing.envVar) {
+                    msg += ` (or set environment variable ${missing.envVar})`;
+                }
+                return msg;
+            });
+            throw new CommanderError(errorMessages.join('\n'));
+        }
+    }
+
+    /**
      * Validate option constraints including conflicts and implications
      * @private
      */
     _validateOptionConstraints() {
-        // Check for conflicting options
+        // Check for conflicting options with enhanced logic
         for (const option of this.options) {
             const key = option.attributeName();
-            const isSet = this.getOptionValue(key) !== undefined && 
-                         this.getOptionValueSource(key) !== 'default';
+            const value = this.getOptionValue(key);
+            const source = this.getOptionValueSource(key);
+            const isSet = value !== undefined && source !== 'default';
             
             if (isSet && option.conflictsWith && option.conflictsWith.length > 0) {
                 for (const conflictFlag of option.conflictsWith) {
-                    const conflictOption = this._findOption(`--${conflictFlag}`) || this._findOption(`-${conflictFlag}`);
+                    const conflictOption = this._findOption(`--${conflictFlag}`) || 
+                                         this._findOption(`-${conflictFlag}`) ||
+                                         this.options.find(opt => opt.attributeName() === conflictFlag);
+                    
                     if (conflictOption) {
                         const conflictKey = conflictOption.attributeName();
-                        const conflictIsSet = this.getOptionValue(conflictKey) !== undefined && 
-                                            this.getOptionValueSource(conflictKey) !== 'default';
+                        const conflictValue = this.getOptionValue(conflictKey);
+                        const conflictSource = this.getOptionValueSource(conflictKey);
+                        const conflictIsSet = conflictValue !== undefined && conflictSource !== 'default';
+                        
                         if (conflictIsSet) {
                             throw new CommanderError(`Option ${option.flags} cannot be used with option ${conflictOption.flags}`);
                         }
@@ -2579,20 +2876,78 @@ Expecting one of '${allowedValues.join("', '")}'`);
                 }
             }
             
-            // Handle option implications
+            // Handle option implications with enhanced logic
             if (isSet && option.impliesOptions && option.impliesOptions.length > 0) {
                 for (const impliedFlag of option.impliesOptions) {
-                    const impliedOption = this._findOption(`--${impliedFlag}`) || this._findOption(`-${impliedFlag}`);
+                    const impliedOption = this._findOption(`--${impliedFlag}`) || 
+                                        this._findOption(`-${impliedFlag}`) ||
+                                        this.options.find(opt => opt.attributeName() === impliedFlag);
+                    
                     if (impliedOption) {
                         const impliedKey = impliedOption.attributeName();
-                        if (this.getOptionValue(impliedKey) === undefined) {
-                            const impliedValue = impliedOption.defaultValue !== undefined ? 
-                                               impliedOption.defaultValue : true;
-                            this.setOptionValueWithSource(impliedKey, impliedValue, 'implied');
+                        const impliedValue = this.getOptionValue(impliedKey);
+                        const impliedSource = this.getOptionValueSource(impliedKey);
+                        
+                        // Only set implied value if not already set by CLI or env
+                        if (impliedValue === undefined || impliedSource === 'default') {
+                            const newImpliedValue = impliedOption.defaultValue !== undefined ? 
+                                                   impliedOption.defaultValue : 
+                                                   (impliedOption.isBoolean() ? true : undefined);
+                            
+                            if (newImpliedValue !== undefined) {
+                                this.setOptionValueWithSource(impliedKey, newImpliedValue, 'implied');
+                            }
                         }
                     }
                 }
             }
+        }
+        
+        // Validate option groups
+        if (this._optionGroups) {
+            for (const group of this._optionGroups) {
+                this._validateOptionGroup(group);
+            }
+        }
+    }
+
+    /**
+     * Validate a specific option group
+     * @private
+     */
+    _validateOptionGroup(group) {
+        const setOptions = [];
+        
+        // Find which options in the group are set
+        for (const option of group.options) {
+            const key = option.attributeName();
+            const value = this.getOptionValue(key);
+            const source = this.getOptionValueSource(key);
+            
+            if (value !== undefined && source !== 'default') {
+                setOptions.push(option);
+            }
+        }
+        
+        // Check exclusive constraint
+        if (group.exclusive && setOptions.length > 1) {
+            const optionNames = setOptions.map(opt => opt.flags);
+            throw new CommanderError(`Options in group '${group.name}' are mutually exclusive, but multiple were set: ${optionNames.join(', ')}`);
+        }
+        
+        // Check required constraint
+        if (group.required && setOptions.length === 0) {
+            throw new CommanderError(`At least one option from group '${group.name}' is required`);
+        }
+        
+        // Check minimum count constraint
+        if (group.minCount !== undefined && setOptions.length < group.minCount) {
+            throw new CommanderError(`Group '${group.name}' requires at least ${group.minCount} option(s), but only ${setOptions.length} were set`);
+        }
+        
+        // Check maximum count constraint
+        if (group.maxCount !== undefined && setOptions.length > group.maxCount) {
+            throw new CommanderError(`Group '${group.name}' allows at most ${group.maxCount} option(s), but ${setOptions.length} were set`);
         }
     }
 
@@ -2645,6 +3000,18 @@ Expecting one of '${allowedValues.join("', '")}'`);
             throw new Error('Option group must have a name');
         }
         
+        // Initialize option groups array if not exists
+        if (!this._optionGroups) {
+            this._optionGroups = [];
+        }
+        
+        // Check for duplicate group names
+        const existingGroup = this._optionGroups.find(g => g.name === group.name);
+        if (existingGroup) {
+            throw new Error(`Option group '${group.name}' already exists`);
+        }
+        
+        this._optionGroups.push(group);
         this._optionProcessor.addOptionGroup(group);
         
         // Add all options from the group to the command
@@ -2697,6 +3064,160 @@ Expecting one of '${allowedValues.join("', '")}'`);
         }
         
         return this.addOption(option);
+    }
+
+    /**
+     * Set environment variable prefix for all options
+     */
+    setEnvPrefix(prefix) {
+        this._envPrefix = prefix;
+        
+        // Apply prefix to existing options that don't have explicit env vars
+        for (const option of this.options) {
+            if (!option.envVar) {
+                const envName = this._generateEnvVarName(option, prefix);
+                option.env(envName);
+            }
+        }
+        
+        return this;
+    }
+
+    /**
+     * Get environment variable prefix
+     */
+    getEnvPrefix() {
+        return this._envPrefix;
+    }
+
+    /**
+     * Enable automatic environment variable mapping for all options
+     */
+    enableAutoEnv(prefix = null) {
+        this._autoEnv = true;
+        if (prefix) {
+            this.setEnvPrefix(prefix);
+        }
+        
+        // Apply to existing options
+        for (const option of this.options) {
+            if (!option.envVar) {
+                const envName = this._generateEnvVarName(option, this._envPrefix);
+                option.env(envName);
+            }
+        }
+        
+        return this;
+    }
+
+    /**
+     * Disable automatic environment variable mapping
+     */
+    disableAutoEnv() {
+        this._autoEnv = false;
+        return this;
+    }
+
+    /**
+     * Generate environment variable name for an option
+     * @private
+     */
+    _generateEnvVarName(option, prefix = null) {
+        let name = option.attributeName().toUpperCase();
+        
+        // Convert camelCase to SNAKE_CASE
+        name = name.replace(/([A-Z])/g, '_$1').replace(/^_/, '');
+        
+        if (prefix) {
+            name = `${prefix.toUpperCase()}_${name}`;
+        }
+        
+        return name;
+    }
+
+    /**
+     * Get all environment variable mappings
+     */
+    getEnvMappings() {
+        const mappings = {};
+        
+        for (const option of this.options) {
+            if (option.envVar) {
+                mappings[option.envVar] = {
+                    option: option.flags,
+                    attributeName: option.attributeName(),
+                    value: process.env[option.envVar],
+                    hasValue: process.env[option.envVar] !== undefined
+                };
+            }
+        }
+        
+        return mappings;
+    }
+
+    /**
+     * Validate environment variables
+     */
+    validateEnvVars() {
+        const errors = [];
+        
+        for (const option of this.options) {
+            if (option.envVar && process.env[option.envVar] !== undefined) {
+                const envValue = process.env[option.envVar];
+                
+                try {
+                    // Test parsing the environment value
+                    if (option.parseArg) {
+                        option.parseArg(envValue, option.defaultValue);
+                    }
+                    
+                    // Test choices validation
+                    if (option.choices && !option.choices.includes(envValue)) {
+                        errors.push({
+                            option: option.flags,
+                            envVar: option.envVar,
+                            value: envValue,
+                            error: `Invalid choice. Expected one of: ${option.choices.join(', ')}`
+                        });
+                    }
+                } catch (error) {
+                    errors.push({
+                        option: option.flags,
+                        envVar: option.envVar,
+                        value: envValue,
+                        error: error.message
+                    });
+                }
+            }
+        }
+        
+        return errors;
+    }
+
+    /**
+     * Check if required options are satisfied by environment variables
+     */
+    checkRequiredWithEnv() {
+        const missing = [];
+        
+        for (const option of this.options) {
+            if ((option.required || option.mandatory)) {
+                const key = option.attributeName();
+                const hasCliValue = this.getOptionValueSource(key) === 'cli';
+                const hasEnvValue = option.envVar && process.env[option.envVar] !== undefined;
+                const hasDefaultValue = option.defaultValue !== undefined;
+                
+                if (!hasCliValue && !hasEnvValue && !hasDefaultValue) {
+                    missing.push({
+                        option: option.flags,
+                        envVar: option.envVar,
+                        attributeName: key
+                    });
+                }
+            }
+        }
+        
+        return missing;
     }
 
     /**

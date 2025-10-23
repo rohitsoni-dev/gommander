@@ -26,8 +26,27 @@ try {
 
   console.log('Compiling Go to WASM...');
   
-  // Build the WASM binary
-  execSync('go build -o wasm/gocommander.wasm bridge/interface.go', {
+  // Check if TinyGo is available for smaller binaries
+  let useTinyGo = false;
+  try {
+    execSync('tinygo version', { stdio: 'ignore' });
+    useTinyGo = true;
+    console.log('Using TinyGo for optimized WASM build...');
+  } catch (error) {
+    console.log('TinyGo not found, using standard Go compiler...');
+  }
+  
+  // Build command with optimization flags
+  let buildCmd;
+  if (useTinyGo) {
+    // TinyGo with optimization flags
+    buildCmd = 'tinygo build -o wasm/gocommander.wasm -target wasm -opt 2 -gc leaking -no-debug bridge/interface.go';
+  } else {
+    // Standard Go with optimization flags
+    buildCmd = 'go build -ldflags="-s -w" -o wasm/gocommander.wasm bridge/interface.go';
+  }
+  
+  execSync(buildCmd, {
     env,
     stdio: 'inherit',
     cwd: projectRoot

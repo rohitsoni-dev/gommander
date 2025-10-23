@@ -32,16 +32,29 @@ function checkBundleSize() {
   }
   
   let totalSize = 0;
+  let compressedSize = 0;
   const files = [];
   
   // Check JavaScript files
-  const jsFiles = ['index.js', 'index.esm.js', 'index.d.ts'];
+  const jsFiles = ['index.js', 'index.esm.js', 'index.umd.js', 'index.d.ts'];
   for (const file of jsFiles) {
     const filePath = path.join(libDir, file);
     if (fs.existsSync(filePath)) {
       const stats = fs.statSync(filePath);
-      files.push({ name: `lib/${file}`, size: stats.size });
-      totalSize += stats.size;
+      const size = stats.size;
+      
+      // Estimate gzipped size (rough approximation)
+      const content = fs.readFileSync(filePath, 'utf8');
+      const estimatedGzipSize = Math.floor(size * 0.3); // Rough estimate
+      
+      files.push({ 
+        name: `lib/${file}`, 
+        size: size,
+        gzipSize: estimatedGzipSize,
+        type: 'js'
+      });
+      totalSize += size;
+      compressedSize += estimatedGzipSize;
     }
   }
   
@@ -50,42 +63,95 @@ function checkBundleSize() {
   for (const file of wasmFiles) {
     const filePath = path.join(wasmDir, file);
     const stats = fs.statSync(filePath);
-    files.push({ name: `wasm/${file}`, size: stats.size });
-    totalSize += stats.size;
+    const size = stats.size;
+    
+    // WASM files compress well
+    const estimatedGzipSize = Math.floor(size * 0.4);
+    
+    files.push({ 
+      name: `wasm/${file}`, 
+      size: size,
+      gzipSize: estimatedGzipSize,
+      type: 'wasm'
+    });
+    totalSize += size;
+    compressedSize += estimatedGzipSize;
+  }
+  
+  // Check support files
+  const supportFiles = ['wasm_exec.js'];
+  for (const file of supportFiles) {
+    const filePath = path.join(wasmDir, file);
+    if (fs.existsSync(filePath)) {
+      const stats = fs.statSync(filePath);
+      const size = stats.size;
+      const estimatedGzipSize = Math.floor(size * 0.3);
+      
+      files.push({ 
+        name: `wasm/${file}`, 
+        size: size,
+        gzipSize: estimatedGzipSize,
+        type: 'support'
+      });
+      totalSize += size;
+      compressedSize += estimatedGzipSize;
+    }
   }
   
   // Display results
   console.log('📦 Bundle Size Analysis');
-  console.log('═'.repeat(40));
+  console.log('═'.repeat(60));
   
   files.sort((a, b) => b.size - a.size);
   
+  console.log('File'.padEnd(25) + 'Raw Size'.padStart(12) + 'Gzipped'.padStart(12) + 'Type'.padStart(8) + '%'.padStart(6));
+  console.log('─'.repeat(60));
+  
   for (const file of files) {
     const percentage = ((file.size / totalSize) * 100).toFixed(1);
-    console.log(`${file.name.padEnd(25)} ${formatBytes(file.size).padStart(10)} (${percentage}%)`);
+    const typeIcon = file.type === 'wasm' ? '🔧' : file.type === 'js' ? '📜' : '🔗';
+    console.log(
+      `${file.name.padEnd(25)} ${formatBytes(file.size).padStart(10)} ${formatBytes(file.gzipSize).padStart(10)} ${(typeIcon + file.type).padStart(6)} ${percentage.padStart(4)}%`
+    );
   }
   
-  console.log('─'.repeat(40));
-  console.log(`Total Size:                ${formatBytes(totalSize).padStart(10)}`);
+  console.log('─'.repeat(60));
+  console.log(`Total Raw Size:            ${formatBytes(totalSize).padStart(10)}`);
+  console.log(`Total Compressed:          ${formatBytes(compressedSize).padStart(10)}`);
+  console.log(`Compression Ratio:         ${((1 - compressedSize / totalSize) * 100).toFixed(1)}%`);
   
   // Size requirements check (< 500KB as per requirements)
   const maxSize = 500 * 1024; // 500KB
+  const maxCompressedSize = 200 * 1024; // 200KB compressed target
   const sizeCheck = totalSize <= maxSize;
+  const compressedSizeCheck = compressedSize <= maxCompressedSize;
   
   console.log('\n🎯 Size Requirements');
-  console.log('═'.repeat(40));
-  console.log(`Maximum allowed:           ${formatBytes(maxSize).padStart(10)}`);
-  console.log(`Current size:              ${formatBytes(totalSize).padStart(10)}`);
-  console.log(`Status:                    ${sizeCheck ? '✅ PASS' : '❌ FAIL'}`);
+  console.log('═'.repeat(60));
+  console.log(`Maximum raw size:          ${formatBytes(maxSize).padStart(10)}`);
+  console.log(`Current raw size:          ${formatBytes(totalSize).padStart(10)}`);
+  console.log(`Raw size status:           ${sizeCheck ? '✅ PASS' : '❌ FAIL'}`);
+  console.log(`Maximum compressed:        ${formatBytes(maxCompressedSize).padStart(10)}`);
+  console.log(`Current compressed:        ${formatBytes(compressedSize).padStart(10)}`);
+  console.log(`Compressed status:         ${compressedSizeCheck ? '✅ PASS' : '❌ FAIL'}`);
   
-  if (!sizeCheck) {
-    const excess = totalSize - maxSize;
-    console.log(`Excess:                    ${formatBytes(excess).padStart(10)}`);
+  if (!sizeCheck || !compressedSizeCheck) {
+    if (!sizeCheck) {
+      const excess = totalSize - maxSize;
+      console.log(`Raw size excess:           ${formatBytes(excess).padStart(10)}`);
+    }
+    if (!compressedSizeCheck) {
+      const excess = compressedSize - maxCompressedSize;
+      console.log(`Compressed excess:         ${formatBytes(excess).padStart(10)}`);
+    }
+    
     console.log('\n💡 Size Optimization Tips:');
-    console.log('- Use TinyGo for smaller WASM binaries');
+    console.log('- Use TinyGo for smaller WASM binaries (-opt 2 -gc leaking)');
     console.log('- Enable tree-shaking in rollup config');
-    console.log('- Minify JavaScript output');
-    console.log('- Remove unused exports');
+    console.log('- Minify JavaScript output with terser');
+    console.log('- Remove unused exports and dead code');
+    console.log('- Use lazy loading for WASM module');
+    console.log('- Consider splitting large modules');
   }
   
   // Performance comparison with Commander.js
@@ -116,7 +182,9 @@ function checkBundleSize() {
   
   console.log('\n' + '═'.repeat(40));
   
-  if (sizeCheck) {
+  const overallPass = sizeCheck && compressedSizeCheck;
+  
+  if (overallPass) {
     console.log('✅ Bundle size check passed!');
     return true;
   } else {

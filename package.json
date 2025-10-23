@@ -26,6 +26,7 @@
   ],
   "scripts": {
     "build": "npm run clean && npm run build:wasm && npm run build:js && npm run build:types && npm run build:docs",
+    "build:optimized": "node scripts/build-optimized.js",
     "build:wasm": "node scripts/build-wasm.js",
     "build:js": "rollup -c rollup.config.js",
     "build:types": "node -e \"require('fs').copyFileSync('src/index.d.ts', 'lib/index.d.ts')\"",

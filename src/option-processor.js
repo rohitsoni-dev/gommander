@@ -343,11 +343,11 @@ class OptionProcessor {
   _checkCompatibility(option1, option2) {
     // Check for flag conflicts
     if (option1.short && option2.short && option1.short === option2.short) {
-      throw new Error(`Short flag conflict: both options use -${option1.short}`);
+      throw new Error(`Short flag conflict: both options use ${option1.short}`);
     }
 
     if (option1.long && option2.long && option1.long === option2.long) {
-      throw new Error(`Long flag conflict: both options use --${option1.long}`);
+      throw new Error(`Long flag conflict: both options use ${option1.long}`);
     }
   }
 
@@ -391,6 +391,9 @@ class OptionGroup {
     this.options = [];
     this.exclusive = false;
     this.required = false;
+    this.minCount = undefined;
+    this.maxCount = undefined;
+    this.customValidator = null;
   }
 
   /**
@@ -399,7 +402,22 @@ class OptionGroup {
    * @returns {OptionGroup} - Returns this for chaining
    */
   addOption(option) {
+    if (this.options.includes(option)) {
+      throw new Error(`Option ${option.flags} is already in group ${this.name}`);
+    }
     this.options.push(option);
+    return this;
+  }
+
+  /**
+   * Add multiple options to the group
+   * @param {Option[]} options - Array of options to add
+   * @returns {OptionGroup} - Returns this for chaining
+   */
+  addOptions(options) {
+    for (const option of options) {
+      this.addOption(option);
+    }
     return this;
   }
 
@@ -410,6 +428,9 @@ class OptionGroup {
    */
   setExclusive(exclusive = true) {
     this.exclusive = exclusive;
+    if (exclusive) {
+      this.maxCount = 1;
+    }
     return this;
   }
 
@@ -420,7 +441,134 @@ class OptionGroup {
    */
   setRequired(required = true) {
     this.required = required;
+    if (required && this.minCount === undefined) {
+      this.minCount = 1;
+    }
     return this;
+  }
+
+  /**
+   * Set minimum number of options that must be set
+   * @param {number} count - Minimum count
+   * @returns {OptionGroup} - Returns this for chaining
+   */
+  setMinCount(count) {
+    this.minCount = count;
+    if (count > 0) {
+      this.required = true;
+    }
+    return this;
+  }
+
+  /**
+   * Set maximum number of options that can be set
+   * @param {number} count - Maximum count
+   * @returns {OptionGroup} - Returns this for chaining
+   */
+  setMaxCount(count) {
+    this.maxCount = count;
+    if (count === 1) {
+      this.exclusive = true;
+    }
+    return this;
+  }
+
+  /**
+   * Set both min and max count
+   * @param {number} min - Minimum count
+   * @param {number} max - Maximum count
+   * @returns {OptionGroup} - Returns this for chaining
+   */
+  setCountRange(min, max) {
+    this.setMinCount(min);
+    this.setMaxCount(max);
+    return this;
+  }
+
+  /**
+   * Set custom validation function
+   * @param {Function} validator - Custom validation function
+   * @returns {OptionGroup} - Returns this for chaining
+   */
+  setCustomValidator(validator) {
+    if (typeof validator !== 'function') {
+      throw new Error('Custom validator must be a function');
+    }
+    this.customValidator = validator;
+    return this;
+  }
+
+  /**
+   * Remove an option from the group
+   * @param {Option} option - The option to remove
+   * @returns {OptionGroup} - Returns this for chaining
+   */
+  removeOption(option) {
+    const index = this.options.indexOf(option);
+    if (index !== -1) {
+      this.options.splice(index, 1);
+    }
+    return this;
+  }
+
+  /**
+   * Check if the group contains an option
+   * @param {Option} option - The option to check
+   * @returns {boolean} - True if the group contains the option
+   */
+  hasOption(option) {
+    return this.options.includes(option);
+  }
+
+  /**
+   * Get all option names in the group
+   * @returns {string[]} - Array of option names
+   */
+  getOptionNames() {
+    return this.options.map(option => option.attributeName());
+  }
+
+  /**
+   * Validate the group with given option values
+   * @param {Object} optionValues - Object with option values
+   * @throws {Error} - If validation fails
+   */
+  validate(optionValues) {
+    const setOptions = this.options.filter(option => {
+      const key = option.attributeName();
+      return optionValues[key] !== undefined;
+    });
+
+    // Check exclusive constraint
+    if (this.exclusive && setOptions.length > 1) {
+      const optionNames = setOptions.map(opt => opt.flags);
+      throw new Error(`Options in group '${this.name}' are mutually exclusive, but multiple were set: ${optionNames.join(', ')}`);
+    }
+
+    // Check required constraint
+    if (this.required && setOptions.length === 0) {
+      throw new Error(`At least one option from group '${this.name}' is required`);
+    }
+
+    // Check minimum count constraint
+    if (this.minCount !== undefined && setOptions.length < this.minCount) {
+      throw new Error(`Group '${this.name}' requires at least ${this.minCount} option(s), but only ${setOptions.length} were set`);
+    }
+
+    // Check maximum count constraint
+    if (this.maxCount !== undefined && setOptions.length > this.maxCount) {
+      throw new Error(`Group '${this.name}' allows at most ${this.maxCount} option(s), but ${setOptions.length} were set`);
+    }
+
+    // Apply custom validation
+    if (this.customValidator) {
+      const result = this.customValidator(setOptions, optionValues);
+      if (result === false) {
+        throw new Error(`Custom validation failed for group '${this.name}'`);
+      } else if (typeof result === 'object' && result.valid === false) {
+        throw new Error(result.message || `Custom validation failed for group '${this.name}'`);
+      }
+    }
   }
 }
 

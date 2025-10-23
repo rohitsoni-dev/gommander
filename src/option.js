@@ -48,7 +48,7 @@ class Option {
         continue;
       }
       
-      // Match flag and optional argument description
+      // Match flag and optional argument description with improved regex
       const match = part.match(/^(-{1,2})([a-zA-Z0-9][a-zA-Z0-9-]*)(?:\s+(.+))?$/);
       if (match) {
         const [, dashes, name, arg] = match;
@@ -57,6 +57,8 @@ class Option {
           this.short = `-${name}`;
         } else if (dashes === '--') {
           this.long = `--${name}`;
+          
+          // Don't automatically make options negatable - this should be explicit
         }
         
         if (arg) {
@@ -64,6 +66,29 @@ class Option {
           this._parseArgDescription(arg);
         }
       }
+    }
+    
+    // Validate flag configuration
+    this._validateFlags();
+  }
+
+  _validateFlags() {
+    if (!this.short && !this.long) {
+      throw new Error(`Invalid option flags: ${this.flags}`);
+    }
+    
+    // Ensure negatable options are boolean
+    if (this.negatable && (this.required || this.optional)) {
+      throw new Error(`Negatable options cannot require values: ${this.flags}`);
+    }
+    
+    // Validate flag format
+    if (this.short && !/^-[a-zA-Z0-9]$/.test(this.short)) {
+      throw new Error(`Invalid short flag format: ${this.short}`);
+    }
+    
+    if (this.long && !/^--[a-zA-Z0-9][a-zA-Z0-9-]*$/.test(this.long)) {
+      throw new Error(`Invalid long flag format: ${this.long}`);
     }
   }
 
@@ -223,11 +248,19 @@ class Option {
     // Handle negatable options - check both positive and negative forms
     if (this.negatable && this.long) {
       const baseName = this.long.replace(/^--/, '');
-      const negatedName = `no-${baseName}`;
       
-      // Check if flag matches the negated form
-      if (cleanFlag === negatedName || flag === `--${negatedName}`) {
-        return true;
+      // If this option is defined as --no-xxx, check for positive form
+      if (baseName.startsWith('no-')) {
+        const positiveName = baseName.substring(3); // Remove 'no-'
+        if (cleanFlag === positiveName || flag === `--${positiveName}`) {
+          return true;
+        }
+      } else {
+        // This is a positive option, check for negated form
+        const negatedName = `no-${baseName}`;
+        if (cleanFlag === negatedName || flag === `--${negatedName}`) {
+          return true;
+        }
       }
     }
     
@@ -241,40 +274,25 @@ class Option {
     const cleanFlag = flag.replace(/^-+/, '');
     const longName = this.long ? this.long.replace(/^--/, '') : '';
     
-    // Handle both --no-xxx and no-xxx formats
-    return cleanFlag === `no-${longName}` || 
-           (this.long && flag === this.long.replace(/^--/, '--no-'));
+    // If this option is defined as --no-xxx, then the positive form is negated
+    if (longName.startsWith('no-')) {
+      const positiveName = longName.substring(3);
+      return cleanFlag === positiveName || flag === `--${positiveName}`;
+    } else {
+      // This is a positive option, check if flag is the negated form
+      return cleanFlag === `no-${longName}` || flag === `--no-${longName}`;
+    }
   }
 
   // Parse the option value with enhanced processing
   parseValue(value, previous, isNegated = false) {
-    // Handle negatable boolean options
+    // Handle negatable boolean options first
     if (this.negatable) {
       if (isNegated) {
         return false;
-      } else if (this.isBoolean() && (value === undefined || value === '')) {
+      } else if (this.isBoolean() && (value === undefined || value === '' || value === null)) {
         return true;
       }
-    }
-    
-    // Handle environment variable (but don't override explicit CLI values)
-    if ((value === undefined || value === '') && this.envVar && process.env[this.envVar]) {
-      value = process.env[this.envVar];
-    }
-    
-    // Use preset value if available and no value provided
-    if ((value === undefined || value === '') && this.presetArg !== undefined) {
-      value = this.presetArg;
-    }
-    
-    // For boolean options without explicit value, default to true
-    if ((value === undefined || value === '') && this.isBoolean()) {
-      return true;
-    }
-    
-    // Use default if no value provided and not a boolean
-    if (value === undefined && this.defaultValue !== undefined) {
-      value = this.defaultValue;
     }
     
     // Handle variadic options early to preserve array structure
@@ -282,8 +300,38 @@ class Option {
       return this._processVariadicValue(value, previous);
     }
     
+    // Handle environment variable (but don't override explicit CLI values)
+    if ((value === undefined || value === '' || value === null) && this.envVar && process.env[this.envVar]) {
+      value = process.env[this.envVar];
+    }
+    
+    // Use preset value if available and no value provided
+    if ((value === undefined || value === '' || value === null) && this.presetArg !== undefined) {
+      value = this.presetArg;
+    }
+    
+    // For boolean options without explicit value, default to true
+    if ((value === undefined || value === '' || value === null) && this.isBoolean()) {
+      return true;
+    }
+    
+    // Use default if no value provided
+    if ((value === undefined || value === null) && this.defaultValue !== undefined) {
+      value = this.defaultValue;
+    }
+    
+    // Handle empty string for required options
+    if (this.requiresValue && (value === '' || value === null)) {
+      throw new Error(`Option ${this.flags} requires a value`);
+    }
+    
+    // Apply type conversion for common types
+    if (value !== undefined && value !== null && value !== '') {
+      value = this._convertType(value);
+    }
+    
     // Apply custom parser if available
-    if (this.parseArg && value !== undefined && value !== '') {
+    if (this.parseArg && value !== undefined && value !== null && value !== '') {
       try {
         value = this.parseArg(value, previous);
       } catch (error) {
@@ -292,9 +340,63 @@ class Option {
     }
     
     // Validate choices after parsing
-    if (this.choices && value !== undefined && value !== '') {
+    if (this.choices && value !== undefined && value !== null && value !== '') {
       if (!this.choices.includes(value)) {
         throw new Error(`Invalid choice for option ${this.flags}. Expected one of: ${this.choices.join(', ')}`);
+      }
+    }
+    
+    return value;
+  }
+
+  // Convert value to appropriate type based on argument description
+  _convertType(value) {
+    if (typeof value !== 'string') {
+      return value;
+    }
+    
+    // Don't convert if we have a custom parser
+    if (this.parseArg) {
+      return value;
+    }
+    
+    // Infer type from argument description
+    if (this.argDescription) {
+      const desc = this.argDescription.toLowerCase();
+      
+      // Number types
+      if (desc.includes('number') || desc.includes('num') || desc.includes('port') || desc.includes('count')) {
+        const num = Number(value);
+        if (!isNaN(num)) {
+          return num;
+        }
+      }
+      
+      // Integer types
+      if (desc.includes('int') || desc.includes('integer')) {
+        const int = parseInt(value, 10);
+        if (!isNaN(int)) {
+          return int;
+        }
+      }
+      
+      // Float types
+      if (desc.includes('float') || desc.includes('decimal')) {
+        const float = parseFloat(value);
+        if (!isNaN(float)) {
+          return float;
+        }
+      }
+      
+      // Boolean types
+      if (desc.includes('bool') || desc.includes('boolean') || desc.includes('flag')) {
+        const lower = value.toLowerCase();
+        if (['true', 't', 'yes', 'y', '1', 'on'].includes(lower)) {
+          return true;
+        }
+        if (['false', 'f', 'no', 'n', '0', 'off'].includes(lower)) {
+          return false;
+        }
       }
     }
     
@@ -378,7 +480,14 @@ Option.createNegatable = function(flags, description) {
   const option = new Option(flags, description);
   option.requiresValue = false;
   option.negatable = true;
-  option.negate = true;
+  
+  // Determine if this is the negative form based on flags
+  if (flags.includes('--no-')) {
+    option.negate = true;
+  } else {
+    option.negate = false;
+  }
+  
   return option;
 };
 
