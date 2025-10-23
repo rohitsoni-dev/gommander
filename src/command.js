@@ -5,6 +5,8 @@ const { Argument } = require('./argument');
 const { CommanderError, InvalidArgumentError } = require('./errors');
 const { Help } = require('./help');
 const { OptionProcessor, OptionGroup, OptionParsers } = require('./option-processor');
+const { nodeJSIntegration } = require('./nodejs-integration');
+const { versionSupport } = require('./version-support');
 
 class Command extends EventEmitter {
     constructor(name) {
@@ -66,20 +68,25 @@ class Command extends EventEmitter {
         this._defaultOptionGroup = undefined;
         
         // Lifecycle hooks
-        this._lifeCycleHooks = {};
+        this._lifeCycleHooks = {
+            preAction: [],
+            postAction: [],
+            preSubcommand: []
+        };
         
         // Exit callback
         this._exitCallback = null;
         
-        // Output configuration
+        // Output configuration with Node.js stream integration
+        this._streamInterface = nodeJSIntegration.createStreamInterface();
         this._outputConfiguration = {
-            writeOut: (str) => process.stdout.write(str),
-            writeErr: (str) => process.stderr.write(str),
+            writeOut: (str) => this._streamInterface.write(str),
+            writeErr: (str) => this._streamInterface.writeError(str),
             outputError: (str, write) => write(str),
-            getOutHelpWidth: () => process.stdout.isTTY ? process.stdout.columns : undefined,
-            getErrHelpWidth: () => process.stderr.isTTY ? process.stderr.columns : undefined,
-            getOutHasColors: () => process.stdout.isTTY && process.stdout.hasColors?.(),
-            getErrHasColors: () => process.stderr.isTTY && process.stderr.hasColors?.(),
+            getOutHelpWidth: () => this._streamInterface.dimensions.output?.columns,
+            getErrHelpWidth: () => this._streamInterface.dimensions.error?.columns,
+            getOutHasColors: () => this._streamInterface.hasColors.output,
+            getErrHasColors: () => this._streamInterface.hasColors.error,
             stripColor: (str) => str
         };
         
@@ -147,12 +154,14 @@ class Command extends EventEmitter {
     alias(alias) {
         if (alias === undefined) return this._aliases[0];
         this._aliases.push(alias);
+        this._addAliasToWASM(alias);
         return this;
     }
 
     aliases(aliases) {
         if (aliases === undefined) return this._aliases;
         this._aliases = aliases.slice();
+        this._setAliasesInWASM(aliases);
         return this;
     }
 
@@ -389,9 +398,21 @@ Expecting one of '${allowedValues.join("', '")}'`);
             cmd._executableHandler = true;
         }
         
-        if (opts.isDefault) this._defaultCommandName = cmd._name;
+        if (opts.isDefault) {
+            this._defaultCommandName = cmd._name;
+            cmd._isDefault = true;
+            this._setDefaultSubcommandInWASM(cmd);
+        }
+        
         cmd._hidden = !!(opts.noHelp || opts.hidden);
         cmd._executableFile = opts.executableFile || null;
+        
+        // Handle executable subcommands
+        if (opts.executableFile || cmd._executableHandler) {
+            cmd._executableHandler = true;
+            cmd._executableFile = opts.executableFile || `${this._name}-${name}`;
+            this._setExecutableSubcommandInWASM(cmd, cmd._executableFile);
+        }
         
         if (args) cmd.arguments(args);
         this._registerCommand(cmd);
@@ -476,24 +497,154 @@ Expecting one of '${allowedValues.join("', '")}'`);
         return this;
     }
 
+    // Enhanced action methods for async support
+    asyncAction(fn) {
+        const listener = async (args) => {
+            const expectedArgsCount = this.registeredArguments.length;
+            const actionArgs = args.slice(0, expectedArgsCount);
+            if (this._storeOptionsAsProperties) {
+                actionArgs[expectedArgsCount] = this;
+            } else {
+                actionArgs[expectedArgsCount] = this.opts();
+            }
+            actionArgs.push(this);
+
+            return await fn.apply(this, actionArgs);
+        };
+        this._actionHandler = listener;
+        this._action = fn;
+        this._asyncAction = true;
+        
+        // Set async action in WASM if available
+        this._setAsyncActionInWASM(fn);
+        
+        return this;
+    }
+
+    isAsyncAction() {
+        return !!this._asyncAction;
+    }
+
     // Configuration methods
     allowUnknownOption(allowUnknown = true) {
         this._allowUnknownOption = !!allowUnknown;
+        this._updateParsingConfigInWASM();
         return this;
     }
 
     allowExcessArguments(allowExcess = true) {
         this._allowExcessArguments = !!allowExcess;
+        this._updateParsingConfigInWASM();
         return this;
     }
 
     enablePositionalOptions(positional = true) {
         this._enablePositionalOptions = !!positional;
+        this._updateParsingConfigInWASM();
         return this;
     }
 
     passThroughOptions(passThrough = true) {
         this._passThroughOptions = !!passThrough;
+        this._updateParsingConfigInWASM();
+        return this;
+    }
+
+    // Enhanced parsing configuration methods
+
+    /**
+     * Set a positional option mapping
+     */
+    setPositionalOption(position, optionName) {
+        if (!this._positionalOptions) {
+            this._positionalOptions = new Map();
+        }
+        this._positionalOptions.set(position, optionName);
+        this._setPositionalOptionInWASM(position, optionName);
+        return this;
+    }
+
+    /**
+     * Get positional option mapping
+     */
+    getPositionalOptions() {
+        return this._positionalOptions || new Map();
+    }
+
+    /**
+     * Set custom handler for unknown options
+     */
+    setUnknownOptionHandler(handler) {
+        if (typeof handler !== 'function') {
+            throw new Error('Unknown option handler must be a function');
+        }
+        this._unknownOptionHandler = handler;
+        this._setUnknownOptionHandlerInWASM();
+        return this;
+    }
+
+    /**
+     * Set custom handler for excess arguments
+     */
+    setExcessArgumentHandler(handler) {
+        if (typeof handler !== 'function') {
+            throw new Error('Excess argument handler must be a function');
+        }
+        this._excessArgumentHandler = handler;
+        this._setExcessArgumentHandlerInWASM();
+        return this;
+    }
+
+    /**
+     * Get current parsing configuration
+     */
+    getParsingConfig() {
+        return {
+            allowUnknownOption: this._allowUnknownOption,
+            allowExcessArguments: this._allowExcessArguments,
+            enablePositionalOptions: this._enablePositionalOptions,
+            passThroughOptions: this._passThroughOptions,
+            combineFlagAndOptionalValue: this._combineFlagAndOptionalValue,
+            storeOptionsAsProperties: this._storeOptionsAsProperties,
+            showHelpAfterError: this._showHelpAfterError,
+            showSuggestionAfterError: this._showSuggestionAfterError
+        };
+    }
+
+    /**
+     * Set multiple parsing configuration options at once
+     */
+    setParsingConfig(config) {
+        if (typeof config !== 'object' || config === null) {
+            throw new Error('Parsing config must be an object');
+        }
+
+        if ('allowUnknownOption' in config) {
+            this._allowUnknownOption = !!config.allowUnknownOption;
+        }
+        if ('allowExcessArguments' in config) {
+            this._allowExcessArguments = !!config.allowExcessArguments;
+        }
+        if ('enablePositionalOptions' in config) {
+            this._enablePositionalOptions = !!config.enablePositionalOptions;
+        }
+        if ('passThroughOptions' in config) {
+            this._passThroughOptions = !!config.passThroughOptions;
+        }
+        if ('combineFlagAndOptionalValue' in config) {
+            this._combineFlagAndOptionalValue = !!config.combineFlagAndOptionalValue;
+        }
+        if ('storeOptionsAsProperties' in config) {
+            this._storeOptionsAsProperties = !!config.storeOptionsAsProperties;
+        }
+        if ('showHelpAfterError' in config) {
+            this._showHelpAfterError = config.showHelpAfterError;
+        }
+        if ('showSuggestionAfterError' in config) {
+            this._showSuggestionAfterError = !!config.showSuggestionAfterError;
+        }
+
+        this._updateParsingConfigInWASM();
         return this;
     }
 
@@ -527,7 +678,106 @@ Expecting one of '${allowedValues.join("', '")}'`);
     configureOutput(configuration) {
         if (configuration === undefined) return this._outputConfiguration;
         this._outputConfiguration = { ...this._outputConfiguration, ...configuration };
+        this._configureOutputInWASM(configuration);
         return this;
+    }
+
+    // Enhanced output and error configuration methods
+
+    /**
+     * Configure error handling behavior
+     */
+    configureError(configuration) {
+        if (configuration === undefined) return this._errorConfiguration || {};
+        
+        this._errorConfiguration = { ...this._errorConfiguration, ...configuration };
+        
+        // Apply configuration to internal properties
+        if ('showHelpAfterError' in configuration) {
+            this._showHelpAfterError = configuration.showHelpAfterError;
+        }
+        if ('showSuggestionAfterError' in configuration) {
+            this._showSuggestionAfterError = configuration.showSuggestionAfterError;
+        }
+        if ('exitOverride' in configuration) {
+            this._exitCallback = configuration.exitOverride;
+        }
+        if ('suggestionGenerator' in configuration) {
+            this._suggestionGenerator = configuration.suggestionGenerator;
+        }
+        
+        this._configureErrorInWASM(configuration);
+        return this;
+    }
+
+    /**
+     * Set custom suggestion generator for unknown commands
+     */
+    setSuggestionGenerator(generator) {
+        if (typeof generator !== 'function') {
+            throw new Error('Suggestion generator must be a function');
+        }
+        this._suggestionGenerator = generator;
+        return this;
+    }
+
+    /**
+     * Generate suggestion for unknown command
+     */
+    generateSuggestion(unknownCommand) {
+        if (this._suggestionGenerator) {
+            const availableCommands = this.commands.map(cmd => cmd._name);
+            return this._suggestionGenerator(unknownCommand, availableCommands);
+        }
+        
+        // Default suggestion logic
+        return this._generateDefaultSuggestion(unknownCommand);
+    }
+
+    /**
+     * Default suggestion generation logic
+     */
+    _generateDefaultSuggestion(unknownCommand) {
+        if (this.commands.length === 0) {
+            return '';
+        }
+
+        // Simple similarity check - find commands that start with the same letter
+        for (const cmd of this.commands) {
+            if (cmd._name.length > 0 && unknownCommand.length > 0 && 
+                cmd._name[0].toLowerCase() === unknownCommand[0].toLowerCase()) {
+                return `Did you mean '${cmd._name}'?`;
+            }
+        }
+
+        // If no similar command found, suggest available commands
+        if (this.commands.length <= 3) {
+            const names = this.commands.map(cmd => cmd._name);
+            return `Available commands: ${names.join(', ')}`;
+        }
+
+        return 'Use --help to see available commands';
+    }
+
+    /**
+     * Write output using configured output writer
+     */
+    writeOut(str) {
+        this._outputConfiguration.writeOut(str);
+    }
+
+    /**
+     * Write error output using configured error writer
+     */
+    writeErr(str) {
+        this._outputConfiguration.writeErr(str);
+    }
+
+    /**
+     * Output error message using configured error output
+     */
+    outputError(str) {
+        this._outputConfiguration.outputError(str, this._outputConfiguration.writeErr);
     }
 
     helpGroup(heading) {
@@ -566,7 +816,60 @@ Expecting one of '${allowedValues.join("', '")}'`);
         } else {
             this._lifeCycleHooks[event] = [listener];
         }
+        
+        // Add hook to WASM if available
+        this._addHookToWASM(event, listener);
+        
         return this;
+    }
+
+    // Enhanced lifecycle hook management
+    addHook(event, listener) {
+        return this.hook(event, listener);
+    }
+
+    removeHook(event) {
+        const allowedValues = ['preSubcommand', 'preAction', 'postAction'];
+        if (!allowedValues.includes(event)) {
+            throw new Error(`Unexpected value for event passed to removeHook : '${event}'.
+Expecting one of '${allowedValues.join("', '")}'`);
+        }
+        
+        this._lifeCycleHooks[event] = [];
+        this._removeHookFromWASM(event);
+        
+        return this;
+    }
+
+    getHooks(event) {
+        if (event) {
+            return this._lifeCycleHooks[event] || [];
+        }
+        return { ...this._lifeCycleHooks };
+    }
+
+    hasHooks(event) {
+        if (event) {
+            return (this._lifeCycleHooks[event] || []).length > 0;
+        }
+        return Object.values(this._lifeCycleHooks).some(hooks => hooks.length > 0);
+    }
+
+    async executeHooks(event, actionCommand = this) {
+        const hooks = this._lifeCycleHooks[event] || [];
+        
+        for (const hook of hooks) {
+            try {
+                if (typeof hook === 'function') {
+                    await hook(this, actionCommand);
+                }
+            } catch (error) {
+                throw new Error(`${event} hook failed: ${error.message}`);
+            }
+        }
+        
+        // Also execute hooks in WASM if available
+        await this._executeHooksInWASM(event, actionCommand);
     }
 
     exitOverride(fn) {
@@ -579,21 +882,95 @@ Expecting one of '${allowedValues.join("', '")}'`);
                 }
             };
         }
+        
+        // Update WASM configuration
+        this._setExitOverrideInWASM();
+        
         return this;
     }
 
-    version(str, flags, description) {
+    version(str, flags, description, options = {}) {
         if (str === undefined) return this._version;
 
         this._version = str;
 
-        // Add version option
-        const versionFlags = flags || '-V, --version';
-        const versionDesc = description || 'display version number';
+        // Create enhanced version option using version support
+        const versionOption = versionSupport.createVersionOption(
+            str,
+            flags || '-V, --version',
+            description || 'display version number',
+            options
+        );
 
-        this.option(versionFlags, versionDesc);
+        // Add version option with custom action
+        const option = this.createOption(versionOption.flags, versionOption.description);
+        option.action = versionOption.action;
+        
+        // Override the option handling to call version display
+        this.on(`option:${option.name()}`, () => {
+            versionOption.action();
+        });
 
+        this.addOption(option);
         return this;
+    }
+
+    /**
+     * Enhanced version methods with different sources
+     */
+    versionFromPackage(flags, description, options = {}) {
+        const versionOption = versionSupport.createVersionFromPackage(
+            flags || '-V, --version',
+            description || 'display version number',
+            options
+        );
+
+        this._version = versionOption.version;
+        
+        const option = this.createOption(versionOption.flags, versionOption.description);
+        this.on(`option:${option.name()}`, versionOption.action);
+        this.addOption(option);
+        
+        return this;
+    }
+
+    versionFromEnv(envVar, flags, description, options = {}) {
+        const versionOption = versionSupport.createVersionFromEnv(
+            envVar,
+            flags || '-V, --version',
+            description || 'display version number',
+            options
+        );
+
+        this._version = versionOption.version;
+        
+        const option = this.createOption(versionOption.flags, versionOption.description);
+        this.on(`option:${option.name()}`, versionOption.action);
+        this.addOption(option);
+        
+        return this;
+    }
+
+    /**
+     * Set custom version formatter
+     */
+    setVersionFormatter(formatter) {
+        if (typeof formatter !== 'function') {
+            throw new Error('Version formatter must be a function');
+        }
+        this._versionFormatter = formatter;
+        return this;
+    }
+
+    /**
+     * Get version information with context
+     */
+    getVersionInfo() {
+        return {
+            version: this._version,
+            context: versionSupport.buildVersionContext(),
+            sources: versionSupport.getVersionSources()
+        };
     }
 
     // Option value management
@@ -746,8 +1123,120 @@ Expecting one of '${allowedValues.join("', '")}'`);
     async parseAsync(argv, parseOptions) {
         this._prepareForParse();
         const userArgs = this._prepareUserArgs(argv, parseOptions);
-        await this._parseCommand([], userArgs);
+        await this._parseCommandAsync([], userArgs);
         return this;
+    }
+
+    async _parseCommandAsync(operands, unknown) {
+        const parsed = this.parseOptions(unknown);
+        operands = operands.concat(parsed.operands);
+        unknown = parsed.unknown;
+        this.args = operands.concat(unknown);
+
+        if (operands && this._findCommand(operands[0])) {
+            return await this._dispatchSubcommandAsync(operands[0], operands.slice(1), unknown);
+        }
+
+        // Check for help command
+        if (this._getHelpCommand() && operands[0] === this._getHelpCommand().name()) {
+            return this._dispatchHelpCommand(operands[1]);
+        }
+
+        if (this._defaultCommandName) {
+            return await this._dispatchSubcommandAsync(this._defaultCommandName, operands, unknown);
+        }
+
+        if (this.commands.length && this.args.length === 0 && !this._actionHandler && !this._defaultCommandName) {
+            this.help({ error: true });
+        }
+
+        if (this._actionHandler) {
+            this._processArguments();
+            
+            // Execute pre-action hooks
+            await this.executeHooks('preAction', this);
+            
+            try {
+                // Execute the action
+                const result = await this._actionHandler(this.processedArgs);
+                
+                // Execute post-action hooks
+                await this.executeHooks('postAction', this);
+                
+                return result;
+            } catch (error) {
+                // Still execute post-action hooks even if action failed
+                try {
+                    await this.executeHooks('postAction', this);
+                } catch (hookError) {
+                    // Log hook error but throw original action error
+                    console.warn('Post-action hook failed:', hookError.message);
+                }
+                throw error;
+            }
+        }
+
+        // Fallback to JavaScript parsing if WASM not available
+        return this._parseWithJS(this.args);
+    }
+
+    async _dispatchSubcommandAsync(commandName, operands, unknown) {
+        const subCommand = this._findCommand(commandName);
+        if (!subCommand) {
+            // Check for default subcommand
+            const defaultCmd = this.getDefaultSubcommand();
+            if (defaultCmd) {
+                // Prepend the command name back to operands for default command
+                return await defaultCmd._parseCommandAsync([commandName, ...operands], unknown);
+            }
+            this.help({ error: true });
+            return;
+        }
+
+        // Execute pre-subcommand hooks
+        await this.executeHooks('preSubcommand', subCommand);
+
+        if (subCommand._executableHandler) {
+            // Handle executable subcommands
+            return await this._executeSubcommandAsync(subCommand, operands, unknown);
+        } else {
+            return await subCommand._parseCommandAsync(operands, unknown);
+        }
+    }
+
+    async _executeSubcommandAsync(subCommand, operands, unknown) {
+        if (subCommand._executableHandler && subCommand._executableFile) {
+            // Execute as external process using Node.js integration
+            try {
+                const args = [...operands, ...unknown];
+                const options = {
+                    cwd: process.cwd(),
+                    env: process.env,
+                    stdio: 'inherit',
+                    executableDir: this._executableDir,
+                    async: true
+                };
+
+                const result = await nodeJSIntegration.spawnExecutableSubcommand(
+                    subCommand._executableFile,
+                    args,
+                    options
+                );
+
+                return result;
+            } catch (error) {
+                throw new CommanderError(`Failed to execute subcommand ${subCommand._name}: ${error.message}`);
+            }
+        } else if (subCommand._action) {
+            // Execute as internal action
+            if (subCommand._asyncAction) {
+                return await subCommand._action(operands, this.opts());
+            } else {
+                return subCommand._action(operands, this.opts());
+            }
+        }
+        
+        return Promise.resolve();
     }
 
     _parseCommand(operands, unknown) {
@@ -784,15 +1273,65 @@ Expecting one of '${allowedValues.join("', '")}'`);
 
     _dispatchSubcommand(commandName, operands, unknown) {
         const subCommand = this._findCommand(commandName);
-        if (!subCommand) this.help({ error: true });
+        if (!subCommand) {
+            // Check for default subcommand
+            const defaultCmd = this.getDefaultSubcommand();
+            if (defaultCmd) {
+                // Prepend the command name back to operands for default command
+                return defaultCmd._parseCommand([commandName, ...operands], unknown);
+            }
+            this.help({ error: true });
+            return;
+        }
+
+        // Execute pre-subcommand hook if present
+        if (this._lifeCycleHooks.preSubcommand) {
+            for (const hook of this._lifeCycleHooks.preSubcommand) {
+                try {
+                    hook(this, subCommand);
+                } catch (error) {
+                    this.error(`Pre-subcommand hook failed: ${error.message}`);
+                }
+            }
+        }
 
         if (subCommand._executableHandler) {
             // Handle executable subcommands
-            console.warn('Executable subcommands not yet implemented in GoCommander');
-            return;
+            return this._executeSubcommand(subCommand, operands, unknown);
         } else {
             return subCommand._parseCommand(operands, unknown);
         }
+    }
+
+    _executeSubcommand(subCommand, operands, unknown) {
+        if (subCommand._executableHandler && subCommand._executableFile) {
+            // Execute as external process using Node.js integration (synchronous)
+            try {
+                const args = [...operands, ...unknown];
+                const options = {
+                    cwd: process.cwd(),
+                    env: process.env,
+                    stdio: 'inherit',
+                    executableDir: this._executableDir,
+                    async: false
+                };
+
+                const result = nodeJSIntegration.spawnExecutableSubcommand(
+                    subCommand._executableFile,
+                    args,
+                    options
+                );
+
+                return result;
+            } catch (error) {
+                throw new CommanderError(`Failed to execute subcommand ${subCommand._name}: ${error.message}`);
+            }
+        } else if (subCommand._action) {
+            // Execute as internal action
+            return subCommand._action(operands, this.opts());
+        }
+        
+        return Promise.resolve();
     }
 
     _processArguments() {
@@ -999,16 +1538,59 @@ Expecting one of '${allowedValues.join("', '")}'`);
                             const value = isNegated ? false : true;
                             this._processOptionWithEnhancements(flagName, value, option);
                         }
-                    } else if (!this._allowUnknownOption) {
-                        throw new CommanderError(`Unknown option: ${arg}`);
                     } else {
-                        // Store unknown option if allowed
-                        args.push(arg);
-                        if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-                            args.push(argv[++i]);
+                        // Handle unknown options with enhanced logic
+                        let handled = false;
+                        
+                        if (this._unknownOptionHandler) {
+                            // Use custom handler for unknown options
+                            try {
+                                let value = null;
+                                if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                                    value = argv[i + 1];
+                                    i++; // Consume the value
+                                }
+                                this._unknownOptionHandler(arg, value);
+                                handled = true;
+                            } catch (error) {
+                                throw new CommanderError(`Unknown option handler failed for ${arg}: ${error.message}`);
+                            }
+                        } else if (this._passThroughOptions) {
+                            // Pass through unknown options
+                            args.push(arg);
+                            if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                                args.push(argv[++i]);
+                            }
+                            handled = true;
+                        } else if (this._allowUnknownOption) {
+                            // Store unknown option if allowed
+                            args.push(arg);
+                            if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                                args.push(argv[++i]);
+                            }
+                            handled = true;
+                        }
+                        
+                        if (!handled) {
+                            throw new CommanderError(`Unknown option: ${arg}`);
                         }
                     }
                 } else {
+                    // Check for positional options first
+                    if (this._enablePositionalOptions && this._positionalOptions) {
+                        const position = args.length;
+                        const optionName = this._positionalOptions.get(position);
+                        
+                        if (optionName) {
+                            // Treat this argument as a positional option
+                            const option = this._findOption(`--${optionName}`) || this._findOption(`-${optionName}`);
+                            if (option) {
+                                this._processOptionWithEnhancements(optionName, arg, option);
+                                continue;
+                            }
+                        }
+                    }
+                    
                     args.push(arg);
                 }
             }
@@ -1016,6 +1598,21 @@ Expecting one of '${allowedValues.join("', '")}'`);
             // Enhanced validation with option groups and custom validators
             this._optionProcessor.validate();
             this._validateOptionConstraints();
+
+            // Handle excess arguments if needed
+            if (args.length > this.registeredArguments.length && !this._allowExcessArguments) {
+                if (this._excessArgumentHandler) {
+                    try {
+                        this._excessArgumentHandler(args.slice(this.registeredArguments.length));
+                    } catch (error) {
+                        throw new CommanderError(`Excess argument handler failed: ${error.message}`);
+                    }
+                } else {
+                    const expected = this.registeredArguments.length;
+                    const s = expected === 1 ? '' : 's';
+                    throw new CommanderError(`Too many arguments. Expected ${expected} argument${s} but got ${args.length}.`);
+                }
+            }
 
             // Get processed options with environment variable fallback
             const processedOptions = this._optionProcessor.getValues();
@@ -1099,48 +1696,19 @@ Expecting one of '${allowedValues.join("', '")}'`);
         }
         parseOptions = parseOptions || {};
 
-        if (argv === undefined && parseOptions.from === undefined) {
-            if (process.versions?.electron) {
-                parseOptions.from = 'electron';
-            }
-        }
-
-        if (argv === undefined) {
-            argv = process.argv;
-        }
-        this.rawArgs = argv.slice();
-
-        let userArgs;
-        switch (parseOptions.from) {
-            case undefined:
-            case 'node':
-                this._scriptPath = argv[1];
-                userArgs = argv.slice(2);
-                break;
-            case 'electron':
-                if (process.defaultApp) {
-                    this._scriptPath = argv[1];
-                    userArgs = argv.slice(2);
-                } else {
-                    userArgs = argv.slice(1);
-                }
-                break;
-            case 'user':
-                userArgs = argv.slice(0);
-                break;
-            case 'eval':
-                userArgs = argv.slice(1);
-                break;
-            default:
-                throw new Error(`unexpected parse option { from: '${parseOptions.from}' }`);
-        }
+        // Use enhanced Node.js integration for argument parsing
+        const nodeJSInfo = nodeJSIntegration.parseProcessArgv(argv, parseOptions);
+        
+        this.rawArgs = nodeJSInfo.rawArgs;
+        this._scriptPath = nodeJSInfo.scriptPath;
+        this._nodeJSInfo = nodeJSInfo;
 
         if (!this._name && this._scriptPath) {
             this.nameFromFilename(this._scriptPath);
         }
         this._name = this._name || 'program';
 
-        return userArgs;
+        return nodeJSInfo.userArgs;
     }
 
     // Help methods
@@ -1253,11 +1821,12 @@ Expecting one of '${allowedValues.join("', '")}'`);
 
     // Error handling methods
     error(message, errorOptions = {}) {
-        this._outputConfiguration.outputError(`${message}\n`, this._outputConfiguration.writeErr);
+        this.outputError(`${message}\n`);
+        
         if (typeof this._showHelpAfterError === 'string') {
-            this._outputConfiguration.writeErr(`${this._showHelpAfterError}\n`);
+            this.writeErr(`${this._showHelpAfterError}\n`);
         } else if (this._showHelpAfterError) {
-            this._outputConfiguration.writeErr('\n');
+            this.writeErr('\n');
             this.outputHelp({ error: true });
         }
         
@@ -1301,7 +1870,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
         let message = `error: unknown command '${unknownName}'`;
         
         if (this._showSuggestionAfterError) {
-            // Add suggestion logic here if needed
+            const suggestion = this.generateSuggestion(unknownName);
+            if (suggestion) {
+                message += `\n${suggestion}`;
+            }
         }
         
         this.error(message, { code: 'commander.unknownCommand' });
@@ -1579,6 +2151,1022 @@ Expecting one of '${allowedValues.join("', '")}'`);
         }
         
         return this.addOption(option);
+    }
+
+    // Enhanced subcommand WASM integration methods
+
+    async _setExecutableSubcommandInWASM(cmd, executableFile) {
+        if (!cmd._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.setExecutableSubcommand(
+                cmd._wasmCommandId,
+                executableFile,
+                this._executableDir
+            );
+
+            if (result.error) {
+                console.warn('Failed to set executable subcommand in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error setting executable subcommand in WASM:', error.message);
+        }
+    }
+
+    async _setDefaultSubcommandInWASM(cmd) {
+        if (!this._wasmCommandId || !cmd._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.setDefaultSubcommand(
+                this._wasmCommandId,
+                cmd._name
+            );
+
+            if (result.error) {
+                console.warn('Failed to set default subcommand in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error setting default subcommand in WASM:', error.message);
+        }
+    }
+
+    async _addAliasToWASM(alias) {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.addCommandAlias(
+                this._wasmCommandId,
+                alias
+            );
+
+            if (result.error) {
+                console.warn('Failed to add alias in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error adding alias in WASM:', error.message);
+        }
+    }
+
+    async _setAliasesInWASM(aliases) {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.setCommandAliases(
+                this._wasmCommandId,
+                aliases
+            );
+
+            if (result.error) {
+                console.warn('Failed to set aliases in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error setting aliases in WASM:', error.message);
+        }
+    }
+
+    // Enhanced subcommand management methods
+
+    /**
+     * Set this command as the default subcommand of its parent
+     */
+    setAsDefault() {
+        this._isDefault = true;
+        if (this.parent) {
+            this.parent._defaultCommandName = this._name;
+            this.parent._setDefaultSubcommandInWASM(this);
+        }
+        return this;
+    }
+
+    /**
+     * Configure this command as an executable subcommand
+     */
+    setExecutable(executableFile) {
+        this._executableHandler = true;
+        this._executableFile = executableFile || `${this.parent?._name || 'program'}-${this._name}`;
+        
+        if (this.parent) {
+            this.parent._setExecutableSubcommandInWASM(this, this._executableFile);
+        }
+        
+        return this;
+    }
+
+    /**
+     * Get information about subcommands
+     */
+    async getSubcommandInfo() {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            // Fallback to JavaScript implementation
+            return {
+                subcommands: this.commands.map(cmd => ({
+                    name: cmd._name,
+                    description: cmd._description,
+                    aliases: cmd._aliases,
+                    hidden: cmd._hidden,
+                    executable: cmd._executableHandler,
+                    isDefault: cmd._isDefault,
+                    hasAction: !!cmd._action
+                })),
+                hasSubcommands: this.commands.length > 0,
+                defaultCommand: this._defaultCommandName ? {
+                    name: this._defaultCommandName
+                } : null,
+                visibleCount: this.commands.filter(cmd => !cmd._hidden).length,
+                executableDir: this._executableDir
+            };
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.getSubcommandInfo(this._wasmCommandId);
+
+            if (result.error) {
+                throw new Error(result.error);
+            }
+
+            return result.data;
+        } catch (error) {
+            console.warn('Error getting subcommand info from WASM:', error.message);
+            // Fallback to JavaScript implementation
+            return this.getSubcommandInfo();
+        }
+    }
+
+    /**
+     * Find subcommand by name or alias
+     */
+    findSubcommand(nameOrAlias) {
+        // First check direct name match
+        let found = this.commands.find(cmd => cmd._name === nameOrAlias);
+        
+        // Then check aliases
+        if (!found) {
+            found = this.commands.find(cmd => cmd._aliases.includes(nameOrAlias));
+        }
+        
+        return found;
+    }
+
+    /**
+     * Get the default subcommand
+     */
+    getDefaultSubcommand() {
+        if (this._defaultCommandName) {
+            return this.findSubcommand(this._defaultCommandName);
+        }
+        return this.commands.find(cmd => cmd._isDefault);
+    }
+
+    /**
+     * Check if this command has subcommands
+     */
+    hasSubcommands() {
+        return this.commands.length > 0;
+    }
+
+    /**
+     * Get all visible (non-hidden) subcommands
+     */
+    getVisibleSubcommands() {
+        return this.commands.filter(cmd => !cmd._hidden);
+    }
+
+    /**
+     * Check if this is an executable subcommand
+     */
+    isExecutableSubcommand() {
+        return this._executableHandler;
+    }
+
+    // WASM integration methods for lifecycle hooks
+
+    async _addHookToWASM(event, listener) {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.addHook(this._wasmCommandId, event);
+
+            if (result.error) {
+                console.warn('Failed to add hook in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error adding hook in WASM:', error.message);
+        }
+    }
+
+    async _removeHookFromWASM(event) {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.removeHook(this._wasmCommandId, event);
+
+            if (result.error) {
+                console.warn('Failed to remove hook in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error removing hook in WASM:', error.message);
+        }
+    }
+
+    async _executeHooksInWASM(event, actionCommand) {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.executeHooks(
+                this._wasmCommandId, 
+                event, 
+                actionCommand._wasmCommandId
+            );
+
+            if (result.error) {
+                console.warn('Failed to execute hooks in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error executing hooks in WASM:', error.message);
+        }
+    }
+
+    async _setAsyncActionInWASM(fn) {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.setAsyncAction(this._wasmCommandId);
+
+            if (result.error) {
+                console.warn('Failed to set async action in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error setting async action in WASM:', error.message);
+        }
+    }
+
+    async getHookInfo() {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            // Fallback to JavaScript implementation
+            return {
+                hasHooks: this.hasHooks(),
+                preActionCount: this._lifeCycleHooks.preAction.length,
+                postActionCount: this._lifeCycleHooks.postAction.length,
+                preSubcommandCount: this._lifeCycleHooks.preSubcommand.length,
+                hasAsyncAction: this._asyncAction,
+                hasAction: !!this._action
+            };
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.getHookInfo(this._wasmCommandId);
+
+            if (result.error) {
+                throw new Error(result.error);
+            }
+
+            return result.data;
+        } catch (error) {
+            console.warn('Error getting hook info from WASM:', error.message);
+            // Fallback to JavaScript implementation
+            return this.getHookInfo();
+        }
+    }
+
+    // WASM integration methods for parsing configuration
+
+    async _updateParsingConfigInWASM() {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const config = this.getParsingConfig();
+            const result = wasmInterface.setParsingConfig(this._wasmCommandId, config);
+
+            if (result.error) {
+                console.warn('Failed to update parsing config in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error updating parsing config in WASM:', error.message);
+        }
+    }
+
+    async _setPositionalOptionInWASM(position, optionName) {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.setPositionalOption(
+                this._wasmCommandId,
+                position,
+                optionName
+            );
+
+            if (result.error) {
+                console.warn('Failed to set positional option in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error setting positional option in WASM:', error.message);
+        }
+    }
+
+    async _setUnknownOptionHandlerInWASM() {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.setUnknownOptionHandler(this._wasmCommandId);
+
+            if (result.error) {
+                console.warn('Failed to set unknown option handler in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error setting unknown option handler in WASM:', error.message);
+        }
+    }
+
+    async _setExcessArgumentHandlerInWASM() {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.setExcessArgumentHandler(this._wasmCommandId);
+
+            if (result.error) {
+                console.warn('Failed to set excess argument handler in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error setting excess argument handler in WASM:', error.message);
+        }
+    }
+
+    async getParsingConfigFromWASM() {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return this.getParsingConfig();
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.getParsingConfig(this._wasmCommandId);
+
+            if (result.error) {
+                throw new Error(result.error);
+            }
+
+            return result.data;
+        } catch (error) {
+            console.warn('Error getting parsing config from WASM:', error.message);
+            return this.getParsingConfig();
+        }
+    }
+
+    // WASM integration methods for output and error configuration
+
+    async _configureOutputInWASM(configuration) {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.configureOutput(this._wasmCommandId, configuration);
+
+            if (result.error) {
+                console.warn('Failed to configure output in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error configuring output in WASM:', error.message);
+        }
+    }
+
+    async _configureErrorInWASM(configuration) {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.configureError(this._wasmCommandId, configuration);
+
+            if (result.error) {
+                console.warn('Failed to configure error handling in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error configuring error handling in WASM:', error.message);
+        }
+    }
+
+    async _setExitOverrideInWASM() {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.setExitOverride(this._wasmCommandId);
+
+            if (result.error) {
+                console.warn('Failed to set exit override in WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error setting exit override in WASM:', error.message);
+        }
+    }
+
+    async generateSuggestionFromWASM(unknownCommand) {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return this._generateDefaultSuggestion(unknownCommand);
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.generateSuggestion(this._wasmCommandId, unknownCommand);
+
+            if (result.error) {
+                throw new Error(result.error);
+            }
+
+            return result.data.suggestion;
+        } catch (error) {
+            console.warn('Error generating suggestion from WASM:', error.message);
+            return this._generateDefaultSuggestion(unknownCommand);
+        }
+    }
+
+    // Node.js runtime integration methods
+
+    /**
+     * Get Node.js runtime information
+     */
+    getNodeJSInfo() {
+        return this._nodeJSInfo || nodeJSIntegration.parseProcessArgv();
+    }
+
+    /**
+     * Get debugging and profiling information
+     */
+    getDebuggingInfo() {
+        return nodeJSIntegration.getDebuggingInfo();
+    }
+
+    /**
+     * Enhanced debugging and profiling tool compatibility
+     */
+    enableProfiling(options = {}) {
+        const {
+            cpuProfile = false,
+            heapProfile = false,
+            outputDir = './profiles',
+            prefix = 'profile'
+        } = options;
+
+        if (cpuProfile) {
+            this._enableCPUProfiling(outputDir, prefix);
+        }
+
+        if (heapProfile) {
+            this._enableHeapProfiling(outputDir, prefix);
+        }
+
+        return this;
+    }
+
+    _enableCPUProfiling(outputDir, prefix) {
+        try {
+            const inspector = require('inspector');
+            const fs = require('fs');
+            const path = require('path');
+
+            if (!inspector.url()) {
+                console.warn('Inspector not available. Start with --inspect to enable CPU profiling.');
+                return;
+            }
+
+            // Ensure output directory exists
+            if (!fs.existsSync(outputDir)) {
+                fs.mkdirSync(outputDir, { recursive: true });
+            }
+
+            const session = new inspector.Session();
+            session.connect();
+
+            // Start CPU profiling
+            session.post('Profiler.enable');
+            session.post('Profiler.start');
+
+            // Stop profiling on exit
+            const stopProfiling = () => {
+                session.post('Profiler.stop', (err, { profile }) => {
+                    if (err) {
+                        console.error('Failed to stop CPU profiling:', err);
+                        return;
+                    }
+
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                    const filename = `${prefix}-cpu-${timestamp}.cpuprofile`;
+                    const filepath = path.join(outputDir, filename);
+
+                    fs.writeFileSync(filepath, JSON.stringify(profile));
+                    console.log(`CPU profile saved to: ${filepath}`);
+                    
+                    session.disconnect();
+                });
+            };
+
+            process.on('exit', stopProfiling);
+            process.on('SIGINT', stopProfiling);
+            process.on('SIGTERM', stopProfiling);
+
+        } catch (error) {
+            console.warn('Failed to enable CPU profiling:', error.message);
+        }
+    }
+
+    _enableHeapProfiling(outputDir, prefix) {
+        try {
+            const inspector = require('inspector');
+            const fs = require('fs');
+            const path = require('path');
+
+            if (!inspector.url()) {
+                console.warn('Inspector not available. Start with --inspect to enable heap profiling.');
+                return;
+            }
+
+            // Ensure output directory exists
+            if (!fs.existsSync(outputDir)) {
+                fs.mkdirSync(outputDir, { recursive: true });
+            }
+
+            const session = new inspector.Session();
+            session.connect();
+
+            // Enable heap profiler
+            session.post('HeapProfiler.enable');
+
+            // Take heap snapshot on exit
+            const takeSnapshot = () => {
+                session.post('HeapProfiler.takeHeapSnapshot', null, (err, result) => {
+                    if (err) {
+                        console.error('Failed to take heap snapshot:', err);
+                        return;
+                    }
+
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                    const filename = `${prefix}-heap-${timestamp}.heapsnapshot`;
+                    const filepath = path.join(outputDir, filename);
+
+                    // The snapshot data comes through the 'HeapProfiler.addHeapSnapshotChunk' event
+                    let snapshotData = '';
+                    
+                    session.on('HeapProfiler.addHeapSnapshotChunk', (message) => {
+                        snapshotData += message.params.chunk;
+                    });
+
+                    session.on('HeapProfiler.reportHeapSnapshotProgress', (message) => {
+                        if (message.params.finished) {
+                            fs.writeFileSync(filepath, snapshotData);
+                            console.log(`Heap snapshot saved to: ${filepath}`);
+                            session.disconnect();
+                        }
+                    });
+                });
+            };
+
+            process.on('exit', takeSnapshot);
+            process.on('SIGINT', takeSnapshot);
+            process.on('SIGTERM', takeSnapshot);
+
+        } catch (error) {
+            console.warn('Failed to enable heap profiling:', error.message);
+        }
+    }
+
+    /**
+     * Enable performance monitoring
+     */
+    enablePerformanceMonitoring(options = {}) {
+        const {
+            interval = 5000,
+            logMemory = true,
+            logCPU = true,
+            logEventLoop = true,
+            outputFile = null
+        } = options;
+
+        const startTime = process.hrtime.bigint();
+        let monitoringInterval;
+
+        const monitor = () => {
+            const now = process.hrtime.bigint();
+            const uptime = Number(now - startTime) / 1e9; // Convert to seconds
+
+            const stats = {
+                timestamp: new Date().toISOString(),
+                uptime: uptime,
+                memory: logMemory ? process.memoryUsage() : null,
+                cpu: logCPU ? process.cpuUsage() : null
+            };
+
+            if (logEventLoop) {
+                // Measure event loop lag
+                const start = process.hrtime.bigint();
+                setImmediate(() => {
+                    const lag = Number(process.hrtime.bigint() - start) / 1e6; // Convert to milliseconds
+                    stats.eventLoopLag = lag;
+                    
+                    this._outputPerformanceStats(stats, outputFile);
+                });
+            } else {
+                this._outputPerformanceStats(stats, outputFile);
+            }
+        };
+
+        monitoringInterval = setInterval(monitor, interval);
+
+        // Stop monitoring on exit
+        const stopMonitoring = () => {
+            if (monitoringInterval) {
+                clearInterval(monitoringInterval);
+                monitoringInterval = null;
+            }
+        };
+
+        process.on('exit', stopMonitoring);
+        process.on('SIGINT', stopMonitoring);
+        process.on('SIGTERM', stopMonitoring);
+
+        return this;
+    }
+
+    _outputPerformanceStats(stats, outputFile) {
+        const output = JSON.stringify(stats, null, 2);
+        
+        if (outputFile) {
+            const fs = require('fs');
+            fs.appendFileSync(outputFile, output + '\n');
+        } else {
+            console.log('Performance Stats:', output);
+        }
+    }
+
+    /**
+     * Check if debugging tools are available
+     */
+    hasDebuggingSupport() {
+        const debugInfo = this.getDebuggingInfo();
+        return {
+            inspector: debugInfo.features.inspector,
+            isDebugging: debugInfo.debugging.isDebugging,
+            debugPort: debugInfo.debugging.debugPort,
+            hasAsyncHooks: debugInfo.features.async_hooks,
+            hasWorkerThreads: debugInfo.features.worker_threads
+        };
+    }
+
+    /**
+     * Setup debugging-friendly error handling
+     */
+    enableDebugMode(options = {}) {
+        const {
+            verboseErrors = true,
+            stackTraces = true,
+            asyncStackTraces = true,
+            unhandledRejections = true
+        } = options;
+
+        if (verboseErrors) {
+            this._verboseErrors = true;
+        }
+
+        if (stackTraces) {
+            Error.stackTraceLimit = Infinity;
+        }
+
+        if (asyncStackTraces && this.hasDebuggingSupport().hasAsyncHooks) {
+            // Enable async stack traces if available
+            try {
+                const asyncHooks = require('async_hooks');
+                // This is a simplified implementation - full async stack traces require more complex setup
+                process.env.NODE_OPTIONS = (process.env.NODE_OPTIONS || '') + ' --async-stack-traces';
+            } catch (error) {
+                console.warn('Failed to enable async stack traces:', error.message);
+            }
+        }
+
+        if (unhandledRejections) {
+            process.on('unhandledRejection', (reason, promise) => {
+                console.error('Unhandled Promise Rejection at:', promise);
+                console.error('Reason:', reason);
+                if (reason instanceof Error && reason.stack) {
+                    console.error('Stack:', reason.stack);
+                }
+            });
+        }
+
+        return this;
+    }
+
+    /**
+     * Configure stream interface
+     */
+    configureStreams(options = {}) {
+        this._streamInterface = nodeJSIntegration.createStreamInterface(options);
+        
+        // Update output configuration to use new streams
+        this._outputConfiguration = {
+            ...this._outputConfiguration,
+            writeOut: (str) => this._streamInterface.write(str),
+            writeErr: (str) => this._streamInterface.writeError(str),
+            getOutHelpWidth: () => this._streamInterface.dimensions.output?.columns,
+            getErrHelpWidth: () => this._streamInterface.dimensions.error?.columns,
+            getOutHasColors: () => this._streamInterface.hasColors.output,
+            getErrHasColors: () => this._streamInterface.hasColors.error
+        };
+        
+        return this;
+    }
+
+    /**
+     * Get current stream interface
+     */
+    getStreamInterface() {
+        return this._streamInterface;
+    }
+
+    /**
+     * Enhanced environment variable option handling
+     */
+    envOption(flags, description, envVar, options = {}) {
+        const option = new Option(flags, description);
+        option.env(envVar);
+        
+        // Get environment variable with enhanced processing
+        try {
+            const envValue = nodeJSIntegration.getEnvironmentVariable(envVar, {
+                defaultValue: options.defaultValue,
+                type: options.type || 'string',
+                required: options.required || false,
+                transform: options.transform
+            });
+            
+            if (envValue !== undefined) {
+                option.default(envValue);
+                // Set the source as environment
+                this.setOptionValueWithSource(option.attributeName(), envValue, 'env');
+            }
+        } catch (error) {
+            if (options.required) {
+                throw new CommanderError(`Environment variable error: ${error.message}`);
+            }
+            // If not required, continue with default value
+            if (options.defaultValue !== undefined) {
+                option.default(options.defaultValue);
+            }
+        }
+        
+        return this.addOption(option);
+    }
+
+    /**
+     * Create multiple environment variable options at once
+     */
+    envOptions(envVarMap) {
+        for (const [envVar, config] of Object.entries(envVarMap)) {
+            const {
+                flags,
+                description,
+                ...options
+            } = config;
+            
+            this.envOption(flags, description, envVar, options);
+        }
+        return this;
+    }
+
+    /**
+     * Load environment variables from .env file
+     */
+    loadEnvFile(filePath = '.env', options = {}) {
+        const {
+            override = false,
+            encoding = 'utf8',
+            required = false
+        } = options;
+
+        try {
+            const fs = require('fs');
+            const path = require('path');
+            
+            const envPath = path.resolve(filePath);
+            
+            if (!fs.existsSync(envPath)) {
+                if (required) {
+                    throw new Error(`Environment file not found: ${envPath}`);
+                }
+                return this;
+            }
+
+            const envContent = fs.readFileSync(envPath, encoding);
+            const envLines = envContent.split('\n');
+
+            for (const line of envLines) {
+                const trimmedLine = line.trim();
+                
+                // Skip empty lines and comments
+                if (!trimmedLine || trimmedLine.startsWith('#')) {
+                    continue;
+                }
+
+                // Parse KEY=VALUE format
+                const equalIndex = trimmedLine.indexOf('=');
+                if (equalIndex === -1) {
+                    continue;
+                }
+
+                const key = trimmedLine.substring(0, equalIndex).trim();
+                let value = trimmedLine.substring(equalIndex + 1).trim();
+
+                // Remove quotes if present
+                if ((value.startsWith('"') && value.endsWith('"')) ||
+                    (value.startsWith("'") && value.endsWith("'"))) {
+                    value = value.slice(1, -1);
+                }
+
+                // Set environment variable if not exists or override is true
+                if (!process.env[key] || override) {
+                    nodeJSIntegration.setEnvironmentVariable(key, value);
+                }
+            }
+        } catch (error) {
+            throw new CommanderError(`Failed to load environment file: ${error.message}`);
+        }
+
+        return this;
+    }
+
+    /**
+     * Get all environment variables with a prefix
+     */
+    getEnvWithPrefix(prefix, options = {}) {
+        const {
+            stripPrefix = true,
+            transform = null,
+            type = 'string'
+        } = options;
+
+        const result = {};
+        
+        for (const [key, value] of Object.entries(process.env)) {
+            if (key.startsWith(prefix)) {
+                const resultKey = stripPrefix ? key.substring(prefix.length) : key;
+                
+                try {
+                    const processedValue = nodeJSIntegration.getEnvironmentVariable(key, {
+                        type,
+                        transform
+                    });
+                    result[resultKey] = processedValue;
+                } catch (error) {
+                    // Skip invalid values
+                    continue;
+                }
+            }
+        }
+        
+        return result;
+    }
+
+    /**
+     * Set multiple environment variables
+     */
+    setEnvVars(envVars, options = {}) {
+        for (const [key, value] of Object.entries(envVars)) {
+            nodeJSIntegration.setEnvironmentVariable(key, value, options);
+        }
+        return this;
+    }
+
+    /**
+     * Set environment variable
+     */
+    setEnv(name, value, options = {}) {
+        nodeJSIntegration.setEnvironmentVariable(name, value, options);
+        return this;
+    }
+
+    /**
+     * Get environment variable with enhanced processing
+     */
+    getEnv(name, options = {}) {
+        return nodeJSIntegration.getEnvironmentVariable(name, options);
+    }
+
+    /**
+     * Configure executable directory for subcommands
+     */
+    executableDir(path) {
+        this._executableDir = path;
+        return this;
+    }
+
+    /**
+     * Get information about spawned processes
+     */
+    getSpawnedProcessInfo() {
+        return nodeJSIntegration.getSpawnedProcessInfo();
+    }
+
+    /**
+     * Kill all spawned processes
+     */
+    killSpawnedProcesses(signal = 'SIGTERM') {
+        nodeJSIntegration.killAllSpawnedProcesses(signal);
+        return this;
+    }
+
+    /**
+     * Enhanced process exit with cleanup
+     */
+    exit(code = 0) {
+        // Kill spawned processes before exiting
+        this.killSpawnedProcesses();
+        
+        if (this._exitCallback) {
+            const error = new CommanderError(code, 'commander.exit', 'Process exit requested');
+            this._exitCallback(error);
+        } else {
+            process.exit(code);
+        }
+    }
+
+    /**
+     * Check if running in specific Node.js environment
+     */
+    isElectron() {
+        return !!process.versions?.electron;
+    }
+
+    isPkg() {
+        return !!process.pkg;
+    }
+
+    isTest() {
+        return process.env.NODE_ENV === 'test';
+    }
+
+    isDebugging() {
+        const debugInfo = this.getDebuggingInfo();
+        return debugInfo.debugging.isDebugging;
+    }
+
+    /**
+     * Get platform-specific information
+     */
+    getPlatformInfo() {
+        const nodeInfo = this.getNodeJSInfo();
+        return {
+            platform: nodeInfo.platform,
+            arch: nodeInfo.arch,
+            version: nodeInfo.version,
+            versions: nodeInfo.versions,
+            isWindows: nodeInfo.platform === 'win32',
+            isMacOS: nodeInfo.platform === 'darwin',
+            isLinux: nodeInfo.platform === 'linux',
+            isElectron: this.isElectron(),
+            isPkg: this.isPkg(),
+            isTest: this.isTest(),
+            isDebugging: this.isDebugging()
+        };
     }
 
     // Additional utility methods for enhanced compatibility

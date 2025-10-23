@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"syscall/js"
 
 	"github.com/gocommander/gocommander/cmd"
@@ -64,19 +65,30 @@ func main() {
 		"getArgument":    wrapFunction(getArgument),
 
 		// Subcommand management
-		"addSubcommand":    wrapFunction(addSubcommand),
-		"removeSubcommand": wrapFunction(removeSubcommand),
-		"findSubcommand":   wrapFunction(findSubcommand),
+		"addSubcommand":           wrapFunction(addSubcommand),
+		"removeSubcommand":        wrapFunction(removeSubcommand),
+		"findSubcommand":          wrapFunction(findSubcommand),
+		"setExecutableSubcommand": wrapFunction(setExecutableSubcommand),
+		"setDefaultSubcommand":    wrapFunction(setDefaultSubcommand),
+		"addCommandAlias":         wrapFunction(addCommandAlias),
+		"setCommandAliases":       wrapFunction(setCommandAliases),
+		"getSubcommandInfo":       wrapFunction(getSubcommandInfo),
 
 		// Parsing and execution
 		"parseArguments":  wrapFunction(parseArguments),
 		"validateCommand": wrapFunction(validateCommand),
 
 		// Action and lifecycle
-		"setAction":     wrapFunction(setAction),
-		"setPreAction":  wrapFunction(setPreAction),
-		"setPostAction": wrapFunction(setPostAction),
-		"executeAction": wrapFunction(executeAction),
+		"setAction":        wrapFunction(setAction),
+		"setAsyncAction":   wrapFunction(setAsyncAction),
+		"setPreAction":     wrapFunction(setPreAction),
+		"setPostAction":    wrapFunction(setPostAction),
+		"setPreSubcommand": wrapFunction(setPreSubcommand),
+		"addHook":          wrapFunction(addHook),
+		"removeHook":       wrapFunction(removeHook),
+		"executeAction":    wrapFunction(executeAction),
+		"executeHooks":     wrapFunction(executeHooks),
+		"getHookInfo":      wrapFunction(getHookInfo),
 
 		// Command information
 		"getCommandInfo": wrapFunction(getCommandInfo),
@@ -85,8 +97,17 @@ func main() {
 		"getHelp":        wrapFunction(getHelp),
 
 		// Configuration
-		"setCommandConfig": wrapFunction(setCommandConfig),
-		"getCommandConfig": wrapFunction(getCommandConfig),
+		"setCommandConfig":         wrapFunction(setCommandConfig),
+		"getCommandConfig":         wrapFunction(getCommandConfig),
+		"setParsingConfig":         wrapFunction(setParsingConfig),
+		"getParsingConfig":         wrapFunction(getParsingConfig),
+		"setPositionalOption":      wrapFunction(setPositionalOption),
+		"setUnknownOptionHandler":  wrapFunction(setUnknownOptionHandler),
+		"setExcessArgumentHandler": wrapFunction(setExcessArgumentHandler),
+		"configureOutput":          wrapFunction(configureOutput),
+		"configureError":           wrapFunction(configureError),
+		"setExitOverride":          wrapFunction(setExitOverride),
+		"generateSuggestion":       wrapFunction(generateSuggestion),
 
 		// Version and metadata
 		"setVersion": wrapFunction(setVersion),
@@ -1677,4 +1698,648 @@ func getOptionProcessingSummary(args []js.Value) (any, error) {
 	summary := processor.GetOptionProcessingSummary()
 
 	return summary, nil
+}
+
+// setExecutableSubcommand configures a subcommand as executable
+func setExecutableSubcommand(args []js.Value) (any, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("commandId and executableFile are required")
+	}
+
+	commandID := args[0].String()
+	executableFile := args[1].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	// Set executable configuration
+	command.SetExecutable(executableFile)
+
+	// Optional executable directory
+	if len(args) > 2 && !args[2].IsUndefined() {
+		executableDir := args[2].String()
+		command.SetExecutableDir(executableDir)
+	}
+
+	return map[string]any{
+		"executableSet":  true,
+		"executableFile": executableFile,
+		"executablePath": command.GetExecutablePath(),
+	}, nil
+}
+
+// setDefaultSubcommand sets a subcommand as the default
+func setDefaultSubcommand(args []js.Value) (any, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("parentId and subcommandName are required")
+	}
+
+	parentID := args[0].String()
+	subcommandName := args[1].String()
+
+	parent, exists := commands[parentID]
+	if !exists {
+		return nil, fmt.Errorf("parent command not found: %s", parentID)
+	}
+
+	// Find the subcommand
+	subcommand := parent.FindSubcommandByNameOrAlias(subcommandName)
+	if subcommand == nil {
+		return nil, fmt.Errorf("subcommand not found: %s", subcommandName)
+	}
+
+	// Set as default
+	subcommand.SetAsDefault()
+
+	return map[string]any{
+		"defaultSet":     true,
+		"subcommandName": subcommandName,
+		"parentId":       parentID,
+	}, nil
+}
+
+// addCommandAlias adds an alias to a command
+func addCommandAlias(args []js.Value) (any, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("commandId and alias are required")
+	}
+
+	commandID := args[0].String()
+	alias := args[1].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	command.AddAlias(alias)
+
+	return map[string]any{
+		"aliasAdded": true,
+		"alias":      alias,
+		"aliases":    command.Aliases,
+	}, nil
+}
+
+// setCommandAliases sets multiple aliases for a command
+func setCommandAliases(args []js.Value) (any, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("commandId and aliases are required")
+	}
+
+	commandID := args[0].String()
+	jsAliases := args[1]
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	// Convert JavaScript array to Go slice
+	if !jsAliases.InstanceOf(js.Global().Get("Array")) {
+		return nil, fmt.Errorf("aliases must be an array")
+	}
+
+	aliases := make([]string, jsAliases.Length())
+	for i := 0; i < jsAliases.Length(); i++ {
+		aliases[i] = jsAliases.Index(i).String()
+	}
+
+	command.SetAliases(aliases)
+
+	return map[string]any{
+		"aliasesSet": true,
+		"aliases":    aliases,
+	}, nil
+}
+
+// getSubcommandInfo returns detailed information about subcommands
+func getSubcommandInfo(args []js.Value) (any, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("commandId is required")
+	}
+
+	commandID := args[0].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	subcommands := make([]map[string]any, len(command.Subcommands))
+	for i, sub := range command.Subcommands {
+		subcommands[i] = map[string]any{
+			"name":        sub.Name,
+			"description": sub.Description,
+			"aliases":     sub.Aliases,
+			"hidden":      sub.Hidden,
+			"executable":  sub.IsExecutableSubcommand(),
+			"isDefault":   sub.IsDefault,
+			"hasAction":   sub.Action != nil,
+		}
+	}
+
+	defaultSubcommand := command.GetDefaultSubcommand()
+	var defaultInfo map[string]any
+	if defaultSubcommand != nil {
+		defaultInfo = map[string]any{
+			"name":        defaultSubcommand.Name,
+			"description": defaultSubcommand.Description,
+		}
+	}
+
+	return map[string]any{
+		"subcommands":    subcommands,
+		"hasSubcommands": command.HasSubcommands(),
+		"defaultCommand": defaultInfo,
+		"visibleCount":   len(command.GetVisibleSubcommands()),
+		"executableDir":  command.ExecutableDir,
+	}, nil
+}
+
+// setAsyncAction sets an async action handler for a command
+func setAsyncAction(args []js.Value) (any, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("commandId is required")
+	}
+
+	commandID := args[0].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	// Store a placeholder async action handler
+	command.SetAsyncAction(func(args []string, opts map[string]any) <-chan error {
+		errChan := make(chan error, 1)
+		// This would call back to JavaScript asynchronously
+		go func() {
+			errChan <- nil
+		}()
+		return errChan
+	})
+
+	return map[string]any{
+		"asyncActionSet": true,
+	}, nil
+}
+
+// addHook adds a lifecycle hook to a command
+func addHook(args []js.Value) (any, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("commandId and hookType are required")
+	}
+
+	commandID := args[0].String()
+	hookType := args[1].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	// Convert string to HookEvent
+	var event cmd.HookEvent
+	switch hookType {
+	case "preAction":
+		event = cmd.HookEventPreAction
+	case "postAction":
+		event = cmd.HookEventPostAction
+	case "preSubcommand":
+		event = cmd.HookEventPreSubcommand
+	default:
+		return nil, fmt.Errorf("invalid hook type: %s", hookType)
+	}
+
+	// Add a placeholder hook handler
+	handler := func(thisCommand *cmd.Command, actionCommand *cmd.Command) error {
+		// This would call back to JavaScript
+		return nil
+	}
+
+	command.AddHook(event, handler)
+
+	return map[string]any{
+		"hookAdded": true,
+		"hookType":  hookType,
+		"hookCount": command.GetHookCount(event),
+	}, nil
+}
+
+// removeHook removes all hooks of a specific type from a command
+func removeHook(args []js.Value) (any, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("commandId and hookType are required")
+	}
+
+	commandID := args[0].String()
+	hookType := args[1].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	// Convert string to HookEvent
+	var event cmd.HookEvent
+	switch hookType {
+	case "preAction":
+		event = cmd.HookEventPreAction
+	case "postAction":
+		event = cmd.HookEventPostAction
+	case "preSubcommand":
+		event = cmd.HookEventPreSubcommand
+	default:
+		return nil, fmt.Errorf("invalid hook type: %s", hookType)
+	}
+
+	command.RemoveHook(event)
+
+	return map[string]any{
+		"hookRemoved": true,
+		"hookType":    hookType,
+		"hookCount":   command.GetHookCount(event),
+	}, nil
+}
+
+// executeHooks executes all hooks of a specific type
+func executeHooks(args []js.Value) (any, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("commandId and hookType are required")
+	}
+
+	commandID := args[0].String()
+	hookType := args[1].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	// Convert string to HookEvent
+	var event cmd.HookEvent
+	switch hookType {
+	case "preAction":
+		event = cmd.HookEventPreAction
+	case "postAction":
+		event = cmd.HookEventPostAction
+	case "preSubcommand":
+		event = cmd.HookEventPreSubcommand
+	default:
+		return nil, fmt.Errorf("invalid hook type: %s", hookType)
+	}
+
+	// Determine action command (could be self or a subcommand)
+	actionCommand := command
+	if len(args) > 2 && !args[2].IsUndefined() {
+		actionCommandID := args[2].String()
+		if actionCmd, exists := commands[actionCommandID]; exists {
+			actionCommand = actionCmd
+		}
+	}
+
+	// Execute the hooks
+	err := command.ExecuteHooks(event, actionCommand)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"hooksExecuted": true,
+		"hookType":      hookType,
+		"hookCount":     command.GetHookCount(event),
+	}, nil
+}
+
+// getHookInfo returns information about hooks for a command
+func getHookInfo(args []js.Value) (any, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("commandId is required")
+	}
+
+	commandID := args[0].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	return map[string]any{
+		"hasHooks":           command.HasHooks(),
+		"preActionCount":     command.GetHookCount(cmd.HookEventPreAction),
+		"postActionCount":    command.GetHookCount(cmd.HookEventPostAction),
+		"preSubcommandCount": command.GetHookCount(cmd.HookEventPreSubcommand),
+		"hasAsyncAction":     command.AsyncAction != nil,
+		"hasAction":          command.Action != nil,
+	}, nil
+}
+
+// setParsingConfig sets advanced parsing configuration for a command
+func setParsingConfig(args []js.Value) (any, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("commandId and config are required")
+	}
+
+	commandID := args[0].String()
+	jsConfig := args[1]
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	// Apply parsing configuration from JavaScript object
+	config := jsObjectToGoMap(jsConfig)
+
+	if val, ok := config["enablePositionalOptions"]; ok {
+		if boolVal, ok := val.(bool); ok {
+			command.EnablePositionalOptions = boolVal
+		}
+	}
+
+	if val, ok := config["passThroughOptions"]; ok {
+		if boolVal, ok := val.(bool); ok {
+			command.PassThroughOptions = boolVal
+		}
+	}
+
+	if val, ok := config["combineFlagAndOptionalValue"]; ok {
+		if boolVal, ok := val.(bool); ok {
+			command.CombineFlagAndOptionalValue = boolVal
+		}
+	}
+
+	return map[string]any{
+		"parsingConfigSet": true,
+		"config":           config,
+	}, nil
+}
+
+// getParsingConfig returns the current parsing configuration for a command
+func getParsingConfig(args []js.Value) (any, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("commandId is required")
+	}
+
+	commandID := args[0].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	return map[string]any{
+		"enablePositionalOptions":     command.EnablePositionalOptions,
+		"passThroughOptions":          command.PassThroughOptions,
+		"combineFlagAndOptionalValue": command.CombineFlagAndOptionalValue,
+		"allowUnknownOption":          command.AllowUnknownOption,
+		"allowExcessArguments":        command.AllowExcessArguments,
+	}, nil
+}
+
+// setPositionalOption maps a position to an option name for positional parsing
+func setPositionalOption(args []js.Value) (any, error) {
+	if len(args) < 3 {
+		return nil, fmt.Errorf("commandId, position, and optionName are required")
+	}
+
+	commandID := args[0].String()
+	position := int(args[1].Float())
+	optionName := args[2].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	// For now, store this configuration in the command
+	// In a full implementation, this would be passed to the parser
+	if command.PassThroughArgs == nil {
+		command.PassThroughArgs = make([]string, 0)
+	}
+
+	// Store positional option mapping (simplified for this implementation)
+	positionConfig := fmt.Sprintf("pos:%d=%s", position, optionName)
+	command.PassThroughArgs = append(command.PassThroughArgs, positionConfig)
+
+	return map[string]any{
+		"positionalOptionSet": true,
+		"position":            position,
+		"optionName":          optionName,
+	}, nil
+}
+
+// setUnknownOptionHandler sets a custom handler for unknown options
+func setUnknownOptionHandler(args []js.Value) (any, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("commandId is required")
+	}
+
+	commandID := args[0].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	// For now, just mark that a custom handler is set
+	// In a full implementation, this would store a reference to the JS function
+	if command.UnknownOptions == nil {
+		command.UnknownOptions = make([]string, 0)
+	}
+	command.UnknownOptions = append(command.UnknownOptions, "custom_handler_set")
+
+	return map[string]any{
+		"unknownOptionHandlerSet": true,
+	}, nil
+}
+
+// setExcessArgumentHandler sets a custom handler for excess arguments
+func setExcessArgumentHandler(args []js.Value) (any, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("commandId is required")
+	}
+
+	commandID := args[0].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	// For now, just mark that a custom handler is set
+	// In a full implementation, this would store a reference to the JS function
+	if command.PassThroughArgs == nil {
+		command.PassThroughArgs = make([]string, 0)
+	}
+	command.PassThroughArgs = append(command.PassThroughArgs, "excess_handler_set")
+
+	return map[string]any{
+		"excessArgumentHandlerSet": true,
+	}, nil
+}
+
+// configureOutput sets output configuration for a command
+func configureOutput(args []js.Value) (any, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("commandId and config are required")
+	}
+
+	commandID := args[0].String()
+	jsConfig := args[1]
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	// Apply output configuration from JavaScript object
+	config := jsObjectToGoMap(jsConfig)
+
+	// Create output configuration
+	outputConfig := &cmd.OutputConfiguration{}
+
+	// For now, use placeholder functions that would call back to JavaScript
+	outputConfig.WriteOut = func(str string) {
+		// This would call back to JavaScript writeOut function
+		fmt.Print(str)
+	}
+
+	outputConfig.WriteErr = func(str string) {
+		// This would call back to JavaScript writeErr function
+		fmt.Fprint(os.Stderr, str)
+	}
+
+	outputConfig.OutputError = func(str string, write func(string)) {
+		// This would call back to JavaScript outputError function
+		write(str)
+	}
+
+	outputConfig.GetOutHelpWidth = func() int {
+		// This would call back to JavaScript getOutHelpWidth function
+		return 80 // Default width
+	}
+
+	outputConfig.GetErrHelpWidth = func() int {
+		// This would call back to JavaScript getErrHelpWidth function
+		return 80 // Default width
+	}
+
+	outputConfig.GetOutHasColors = func() bool {
+		// This would call back to JavaScript getOutHasColors function
+		return false // Default no colors
+	}
+
+	outputConfig.GetErrHasColors = func() bool {
+		// This would call back to JavaScript getErrHasColors function
+		return false // Default no colors
+	}
+
+	outputConfig.StripColor = func(str string) string {
+		// This would call back to JavaScript stripColor function
+		return str // Default no stripping
+	}
+
+	command.ConfigureOutput(outputConfig)
+
+	return map[string]any{
+		"outputConfigured": true,
+		"config":           config,
+	}, nil
+}
+
+// configureError sets error configuration for a command
+func configureError(args []js.Value) (any, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("commandId and config are required")
+	}
+
+	commandID := args[0].String()
+	jsConfig := args[1]
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	// Apply error configuration from JavaScript object
+	config := jsObjectToGoMap(jsConfig)
+
+	// Create error configuration
+	errorConfig := &cmd.ErrorConfiguration{}
+
+	if val, ok := config["showHelpAfterError"]; ok {
+		if boolVal, ok := val.(bool); ok {
+			errorConfig.ShowHelpAfterError = boolVal
+		}
+	}
+
+	if val, ok := config["showSuggestionAfterError"]; ok {
+		if boolVal, ok := val.(bool); ok {
+			errorConfig.ShowSuggestionAfterError = boolVal
+		}
+	}
+
+	// Set placeholder suggestion generator
+	errorConfig.SuggestionGenerator = func(unknownCommand string, availableCommands []string) string {
+		// This would call back to JavaScript suggestion generator
+		return command.GenerateSuggestion(unknownCommand)
+	}
+
+	command.ConfigureError(errorConfig)
+
+	return map[string]any{
+		"errorConfigured": true,
+		"config":          config,
+	}, nil
+}
+
+// setExitOverride sets a custom exit handler for a command
+func setExitOverride(args []js.Value) (any, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("commandId is required")
+	}
+
+	commandID := args[0].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	// Set placeholder exit override handler
+	command.SetExitOverride(func(err error) {
+		// This would call back to JavaScript exit override function
+		// For now, just log the error
+		fmt.Fprintf(os.Stderr, "Exit override: %v\n", err)
+	})
+
+	return map[string]any{
+		"exitOverrideSet": true,
+	}, nil
+}
+
+// generateSuggestion generates a suggestion for an unknown command
+func generateSuggestion(args []js.Value) (any, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("commandId and unknownCommand are required")
+	}
+
+	commandID := args[0].String()
+	unknownCommand := args[1].String()
+
+	command, exists := commands[commandID]
+	if !exists {
+		return nil, fmt.Errorf("command not found: %s", commandID)
+	}
+
+	suggestion := command.GenerateSuggestion(unknownCommand)
+
+	return map[string]any{
+		"suggestion":     suggestion,
+		"unknownCommand": unknownCommand,
+	}, nil
 }

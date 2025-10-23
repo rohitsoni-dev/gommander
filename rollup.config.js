@@ -2,7 +2,10 @@ import resolve from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import typescript from '@rollup/plugin-typescript';
 
-const external = ['fs', 'path', 'events', 'crypto', 'util'];
+const external = [
+  'fs', 'path', 'events', 'crypto', 'util', 'child_process', 
+  'stream', 'inspector', 'async_hooks'
+];
 
 export default [
   // CommonJS build
@@ -24,7 +27,7 @@ export default [
   
   // ES Module build
   {
-    input: 'src/index.js',
+    input: 'src/index.esm.js',
     output: {
       file: 'lib/index.esm.js',
       format: 'es'
@@ -35,6 +38,22 @@ export default [
         preferBuiltins: true
       }),
       commonjs()
+    ]
+  },
+  
+  // TypeScript definitions build
+  {
+    input: 'src/index.d.ts',
+    output: {
+      file: 'lib/index.d.ts',
+      format: 'es'
+    },
+    plugins: [
+      typescript({
+        declaration: true,
+        emitDeclarationOnly: true,
+        outDir: 'lib'
+      })
     ]
   }
 ];

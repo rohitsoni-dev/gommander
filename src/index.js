@@ -3,6 +3,8 @@ const { Option } = require('./option');
 const { Argument } = require('./argument');
 const { CommanderError, InvalidArgumentError } = require('./errors');
 const { Help } = require('./help');
+const { NodeJSIntegration, nodeJSIntegration } = require('./nodejs-integration');
+const { VersionSupport, versionSupport } = require('./version-support');
 
 // Create the main program instance
 const program = new Command();
@@ -20,6 +22,10 @@ module.exports = {
   CommanderError,
   InvalidArgumentError,
   Help,
+  NodeJSIntegration,
+  VersionSupport,
+  nodeJSIntegration,
+  versionSupport,
   program,
   createCommand,
   createOption,
@@ -33,6 +39,10 @@ module.exports.Argument = Argument;
 module.exports.CommanderError = CommanderError;
 module.exports.InvalidArgumentError = InvalidArgumentError;
 module.exports.Help = Help;
+module.exports.NodeJSIntegration = NodeJSIntegration;
+module.exports.VersionSupport = VersionSupport;
+module.exports.nodeJSIntegration = nodeJSIntegration;
+module.exports.versionSupport = versionSupport;
 module.exports.program = program;
 module.exports.createCommand = createCommand;
 module.exports.createOption = createOption;
