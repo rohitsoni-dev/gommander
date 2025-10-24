@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>GoCommander WASM Test</title>
+</head>
+<body>
+    <h1>GoCommander WASM Test</h1>
+    <div id="output"></div>
+    <button onclick="testGoCommander()">Test GoCommander</button>
+    
+    <script src="wasm_exec.js"></script>
+    <script>
+        let goCommanderReady = false;
+        
+        const go = new Go();
+        WebAssembly.instantiateStreaming(fetch("gocommander.wasm"), go.importObject).then((result) => {
+            go.run(result.instance);
+            
+            // Wait for gocommander to be available
+            const checkReady = () => {
+                if (typeof gocommander !== 'undefined') {
+                    goCommanderReady = true;
+                    document.getElementById('output').innerHTML = 'GoCommander WASM loaded successfully!';
+                    console.log('GoCommander WASM loaded successfully!');
+                } else {
+                    setTimeout(checkReady, 100);
+                }
+            };
+            checkReady();
+        }).catch((err) => {
+            console.error('Failed to load WASM:', err);
+            document.getElementById('output').innerHTML = 'Failed to load WASM: ' + err;
+        });
+        
+        function testGoCommander() {
+            if (!goCommanderReady) {
+                alert('GoCommander WASM not ready yet');
+                return;
+            }
+            
+            try {
+                // Create a test command
+                const cmd = gocommander.createCommand('test', 'Test command');
+                console.log('Created command:', cmd);
+                
+                // Add an option
+                const optResult = gocommander.addOption(cmd.id, '-v, --verbose', 'Verbose output', false, false);
+                console.log('Added option:', optResult);
+                
+                // Add an argument
+                const argResult = gocommander.addArgument(cmd.id, 'file', 'Input file', true);
+                console.log('Added argument:', argResult);
+                
+                // Test parsing
+                const parseResult = gocommander.parseArguments(cmd.id, ['--verbose', 'test.txt']);
+                console.log('Parse result:', parseResult);
+                
+                document.getElementById('output').innerHTML = 
+                    'GoCommander test completed successfully!<br>' +
+                    'Check console for details.';
+            } catch (error) {
+                console.error('Test failed:', error);
+                document.getElementById('output').innerHTML = 'Test failed: ' + error;
+            }
+        }
+    </script>
+</body>
+</html>

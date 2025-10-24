@@ -7,8 +7,16 @@ yarn-error.log*
 # Build outputs
 lib/
 dist/
-wasm/
 coverage/
+
+# WASM build outputs (but keep support files)
+wasm/*.wasm
+wasm/*.map
+
+# Keep these WASM support files
+!wasm/wasm_exec.js
+!wasm/test.html
+!wasm/README.md
 
 # Go build outputs
 *.exe
