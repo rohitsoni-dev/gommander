@@ -13,6 +13,9 @@ coverage/
 wasm/*.wasm
 wasm/*.map
 
+# WASM binaries in bridge folder (should be built from source)
+bridge/*.wasm
+
 # Keep these WASM support files
 !wasm/wasm_exec.js
 !wasm/test.html
