@@ -7,7 +7,7 @@ class Option {
     this.variadic = false;
     this.mandatory = false;
     this.defaultValue = undefined;
-    this.choices = undefined;
+    this.argChoices = undefined;
     this.hidden = false;
     this.parseArg = undefined;
     this.negatable = false;
@@ -151,7 +151,10 @@ class Option {
   }
 
   choices(values) {
-    this.choices = values;
+    if (values === undefined) {
+      return this.argChoices;
+    }
+    this.argChoices = Array.isArray(values) ? values : [values];
     return this;
   }
 
@@ -173,7 +176,8 @@ class Option {
   }
 
   setChoices(values) {
-    return this.choices(values);
+    this.argChoices = values;
+    return this;
   }
 
   setDefault(value) {
@@ -359,9 +363,9 @@ class Option {
     }
     
     // Validate choices after parsing
-    if (this.choices && value !== undefined && value !== null && value !== '') {
-      if (!this.choices.includes(value)) {
-        throw new Error(`Invalid choice for option ${this.flags}. Expected one of: ${this.choices.join(', ')}`);
+    if (this.argChoices && this.argChoices.length > 0 && value !== undefined && value !== null && value !== '') {
+      if (!this.argChoices.includes(value)) {
+        throw new Error(`Invalid choice for option ${this.flags}. Expected one of: ${this.argChoices.join(', ')}`);
       }
     }
     
@@ -432,8 +436,8 @@ class Option {
       }
       
       // Validate choice for individual values
-      if (this.choices && !this.choices.includes(value)) {
-        throw new Error(`Invalid choice for variadic option ${this.flags}. Expected one of: ${this.choices.join(', ')}`);
+      if (this.argChoices && value !== undefined && value !== null && value !== '' && !this.argChoices.includes(value)) {
+        throw new Error(`Invalid choice for variadic option ${this.flags}. Expected one of: ${this.argChoices.join(', ')}`);
       }
       
       return previous.concat(value);
@@ -454,8 +458,8 @@ class Option {
       text += ` (default: ${this.defaultValue})`;
     }
     
-    if (this.choices) {
-      text += ` (choices: ${this.choices.join(', ')})`;
+    if (this.argChoices) {
+      text += ` (choices: ${this.argChoices.join(', ')})`;
     }
     
     if (this.envVar) {
@@ -504,7 +508,7 @@ Option.createVariadic = function(flags, description) {
 // Create an option with choices
 Option.createChoice = function(flags, description, choices) {
   const option = new Option(flags, description);
-  option.choices = choices;
+  option.argChoices = choices;
   option.requiresValue = true;
   return option;
 };

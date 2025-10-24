@@ -237,9 +237,8 @@ describe('Option Processing System', () => {
       
       option1.conflicts(['quiet']);
       
-      command._options.push(option1, option2);
-      command._optionProcessor.addOption(option1);
-      command._optionProcessor.addOption(option2);
+      command.addOption(option1);
+      command.addOption(option2);
       
       expect(() => {
         command._parseWithJS(['--verbose', '--quiet']);
@@ -253,9 +252,8 @@ describe('Option Processing System', () => {
       verboseOption.implies(['debug']);
       debugOption.default(false);
       
-      command._options.push(verboseOption, debugOption);
-      command._optionProcessor.addOption(verboseOption);
-      command._optionProcessor.addOption(debugOption);
+      command.addOption(verboseOption);
+      command.addOption(debugOption);
       
       const result = command._parseWithJS(['--verbose']);
       expect(result.options.verbose).toBe(true);

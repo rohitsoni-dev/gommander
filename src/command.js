@@ -484,8 +484,12 @@ Expecting one of '${allowedValues.join("', '")}'`);
     argument(name, description, parseArg, defaultValue) {
         const argument = this.createArgument(name, description);
         if (typeof parseArg === 'function') {
-            argument.default(defaultValue).argParser(parseArg);
-        } else {
+            argument.argParser(parseArg);
+            if (defaultValue !== undefined) {
+                argument.default(defaultValue);
+            }
+        } else if (parseArg !== undefined) {
+            // parseArg is actually a default value when it's not a function
             argument.default(parseArg);
         }
         this.addArgument(argument);
@@ -2109,6 +2113,258 @@ Expecting one of '${allowedValues.join("', '")}'`);
         return Promise.resolve();
     }
 
+    /**
+     * Parse arguments using JavaScript implementation
+     */
+    _parseWithJS(argv) {
+        console.log('_parseWithJS called with:', argv);
+        try {
+            const args = [];
+            const options = {};
+            let doubleDashFound = false;
+            
+            // Initialize option processor if not exists
+            if (!this._optionProcessor) {
+                this._optionProcessor = new OptionProcessor();
+                // Add all options to processor
+                for (const option of this.options) {
+                    this._optionProcessor.addOption(option);
+                }
+            }
+
+            // Process arguments
+            for (let i = 0; i < argv.length; i++) {
+                const arg = argv[i];
+                console.log('Processing arg at index', i, ':', arg);
+                
+                // Handle double dash separator
+                if (arg === '--') {
+                    console.log('Found double dash at index', i);
+                    doubleDashFound = true;
+                    // Add remaining arguments as-is
+                    for (let j = i + 1; j < argv.length; j++) {
+                        args.push(argv[j]);
+                        console.log('Adding arg after --:', argv[j]);
+                    }
+                    break;
+                }
+                
+                // If we found double dash, treat everything as arguments
+                if (doubleDashFound) {
+                    args.push(arg);
+                    continue;
+                }
+                
+                // Handle options
+                if (arg.startsWith('-') && !doubleDashFound) {
+                    let processed = false;
+                    
+                    // Handle option with equals sign (--port=8080)
+                    if (arg.includes('=')) {
+                        const [flagPart, valuePart] = arg.split('=', 2);
+                        const option = this._findOption(flagPart);
+                        
+                        if (option) {
+                            const flagName = this._extractFlagName(flagPart);
+                            this._setOptionValue(flagName, valuePart, option, options);
+                            processed = true;
+                        }
+                    }
+                    
+                    // Handle combined short options (-abc)
+                    else if (arg.startsWith('-') && !arg.startsWith('--') && arg.length > 2) {
+                        const flags = arg.slice(1);
+                        let allProcessed = true;
+                        
+                        for (let j = 0; j < flags.length; j++) {
+                            const flag = `-${flags[j]}`;
+                            const option = this._findOption(flag);
+                            
+                            if (option) {
+                                if (option.requiresValue && !option.optionalValue) {
+                                    if (j === flags.length - 1) {
+                                        if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                                            this._setOptionValue(flags[j], argv[++i], option, options);
+                                        } else {
+                                            throw new CommanderError(`error: option '${flag}' requires a value`);
+                                        }
+                                    } else {
+                                        throw new CommanderError(`error: option '${flag}' requires a value but is combined with other flags`);
+                                    }
+                                } else {
+                                    const value = option.isBoolean() ? true : (option.presetArg !== undefined ? option.presetArg : true);
+                                    this._setOptionValue(flags[j], value, option, options);
+                                }
+                            } else {
+                                allProcessed = false;
+                                break;
+                            }
+                        }
+                        
+                        if (allProcessed) {
+                            processed = true;
+                        }
+                    }
+                    
+                    // Handle regular options
+                    if (!processed) {
+                        const option = this._findOption(arg);
+                        
+                        if (option) {
+                            const flagName = this._extractFlagName(arg);
+                            
+                            if (option.requiresValue && !option.optionalValue) {
+                                if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                                    this._setOptionValue(flagName, argv[++i], option, options);
+                                } else {
+                                    throw new CommanderError(`error: option '${option.flags}' requires a value`);
+                                }
+                            } else {
+                                const value = option.isBoolean() ? true : (option.presetArg !== undefined ? option.presetArg : true);
+                                this._setOptionValue(flagName, value, option, options);
+                            }
+                            processed = true;
+                        }
+                    }
+                    
+                    // Handle unknown options
+                    if (!processed) {
+                        if (this._unknownOptionHandler) {
+                            this._unknownOptionHandler(arg, i + 1 < argv.length ? argv[i + 1] : undefined);
+                            processed = true;
+                        } else if (this._allowUnknownOption || this._passThroughOptions) {
+                            args.push(arg);
+                            if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                                args.push(argv[++i]);
+                            }
+                            processed = true;
+                        }
+                        
+                        if (!processed) {
+                            throw new CommanderError(`error: unknown option '${arg}'`);
+                        }
+                    }
+                } else {
+                    // Handle positional options if enabled
+                    if (this._enablePositionalOptions && this._positionalOptions) {
+                        const position = args.length;
+                        const optionName = this._positionalOptions.get(position);
+                        
+                        if (optionName) {
+                            const option = this._findOption(`--${optionName}`) || this._findOption(`-${optionName}`);
+                            if (option) {
+                                this._setOptionValue(optionName, arg, option, options);
+                                continue;
+                            }
+                        }
+                    }
+                    
+                    args.push(arg);
+                }
+            }
+
+            // Validate required options
+            this._checkForMissingMandatoryOptions();
+            
+            // Validate option constraints
+            this._validateOptionConstraints();
+            
+            // Store raw arguments
+            this.args = args;
+            
+            // If double dash was found, return raw arguments without processing
+            if (doubleDashFound) {
+                console.log('Double dash found, returning raw args:', args);
+                return { options, arguments: args };
+            }
+            
+            // Process arguments normally
+            this._processArguments();
+
+            // Handle excess arguments
+            const hasVariadicArg = this.registeredArguments.some(arg => arg.variadic);
+            const maxArgCount = hasVariadicArg ? Infinity : this.registeredArguments.length;
+            
+            if (this.registeredArguments.length > 0 && args.length > maxArgCount && !this._allowExcessArguments && !this._passThroughOptions) {
+                if (this._excessArgumentHandler) {
+                    this._excessArgumentHandler(args.slice(this.registeredArguments.length));
+                } else {
+                    const expected = this.registeredArguments.length;
+                    const s = expected === 1 ? '' : 's';
+                    const forSubcommand = this.parent ? ` for '${this.name()}'` : '';
+                    throw new CommanderError(`error: too many arguments${forSubcommand}. Expected ${expected} argument${s} but got ${args.length}.`);
+                }
+            }
+
+            // Execute action if available
+            if (this._actionHandler) {
+                this._actionHandler(this.processedArgs || args, options);
+            }
+
+            return { options, arguments: this.processedArgs || args };
+        } catch (error) {
+            if (error instanceof CommanderError) {
+                throw error;
+            }
+            throw new CommanderError(error.message);
+        }
+    }
+
+    /**
+     * Set option value with proper processing
+     */
+    _setOptionValue(flagName, value, option, options) {
+        const attributeName = option.attributeName();
+        
+        // Handle negated boolean options
+        if (flagName.startsWith('no-') && option.negate) {
+            options[attributeName] = false;
+            this.setOptionValueWithSource(attributeName, false, 'cli');
+            return;
+        }
+        
+        // Process value through option parser if available
+        let processedValue = value;
+        if (option.parseArg) {
+            try {
+                processedValue = option.parseArg(value, option.defaultValue);
+            } catch (error) {
+                throw new CommanderError(`error: option '${option.flags}' ${error.message}`);
+            }
+        }
+        
+        // Handle choice validation
+        if (option.argChoices && option.argChoices.length > 0) {
+            if (!option.argChoices.includes(processedValue)) {
+                throw new CommanderError(`error: option '${option.flags}' argument '${processedValue}' is invalid. Allowed choices are ${option.argChoices.join(', ')}.`);
+            }
+        }
+        
+        // Handle variadic options
+        if (option.variadic) {
+            if (!options[attributeName]) {
+                options[attributeName] = [];
+            }
+            options[attributeName].push(processedValue);
+        } else {
+            options[attributeName] = processedValue;
+        }
+        
+        this.setOptionValueWithSource(attributeName, options[attributeName], 'cli');
+    }
+
+    /**
+     * Extract flag name from option flag
+     */
+    _extractFlagName(flag) {
+        if (flag.startsWith('--')) {
+            return flag.slice(2);
+        } else if (flag.startsWith('-')) {
+            return flag.slice(1);
+        }
+        return flag;
+    }
+
     _validateArgumentStructure() {
         // Validate that required arguments don't come after optional ones
         let foundOptional = false;
@@ -2136,6 +2392,21 @@ Expecting one of '${allowedValues.join("', '")}'`);
         
         // Validate argument structure first
         this._validateArgumentStructure();
+        
+        // Check for required arguments first
+        const requiredArgCount = this.registeredArguments.filter(arg => arg.required).length;
+        const hasVariadicArg = this.registeredArguments.some(arg => arg.variadic);
+        
+        // If we have required arguments but not enough provided arguments
+        if (requiredArgCount > 0 && this.args.length < requiredArgCount) {
+            // Find the first missing required argument
+            for (let i = 0; i < this.registeredArguments.length; i++) {
+                const declaredArg = this.registeredArguments[i];
+                if (declaredArg.required && i >= this.args.length) {
+                    throw new CommanderError(`error: missing required argument '${declaredArg.name()}'`);
+                }
+            }
+        }
         
         this.registeredArguments.forEach((declaredArg, index) => {
             let value = declaredArg.defaultValue;
@@ -2187,7 +2458,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
                 }
             }
             
-            // Validate required arguments
+            // Validate required arguments (double check)
             if (declaredArg.required && (value === undefined || value === null || (Array.isArray(value) && value.length === 0))) {
                 throw new CommanderError(`error: missing required argument '${declaredArg.name()}'`);
             }
@@ -2356,7 +2627,9 @@ Expecting one of '${allowedValues.join("', '")}'`);
                 if (arg === '--') {
                     stopOptionParsing = true;
                     // Add all remaining arguments as regular arguments (don't include the -- itself)
-                    args.push(...argv.slice(i + 1));
+                    for (let j = i + 1; j < argv.length; j++) {
+                        args.push(argv[j]);
+                    }
                     break;
                 }
 
@@ -2376,7 +2649,8 @@ Expecting one of '${allowedValues.join("', '")}'`);
                         const option = this._findOptionByFlag(flagPart);
                         
                         if (option) {
-                            this._processOptionWithEnhancements(this._extractFlagName(flagPart), valuePart, option);
+                            const flagName = this._extractFlagName(flagPart);
+                            this._processOptionWithEnhancements(flagName, valuePart, option);
                             processed = true;
                         }
                     }
@@ -2427,7 +2701,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
                             const flagName = this._extractFlagName(arg);
                             
                             // Handle negated boolean options (--no-color)
-                            if (option.negatable && arg.includes('no-')) {
+                            if (option.negatable && (arg.includes('no-') || option.isNegated(arg))) {
                                 this._processOptionWithEnhancements(flagName, false, option);
                             } else if (option.requiresValue && !option.optionalValue) {
                                 // Option requires a value
@@ -2470,17 +2744,17 @@ Expecting one of '${allowedValues.join("', '")}'`);
                                 throw new CommanderError(`Unknown option handler failed for ${arg}: ${error.message}`);
                             }
                         } else if (this._passThroughOptions) {
-                            // Pass through unknown options - don't count as arguments
-                            unknownOptions.push(arg);
+                            // Pass through unknown options - add to arguments for pass-through
+                            args.push(arg);
                             if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-                                unknownOptions.push(argv[++i]);
+                                args.push(argv[++i]);
                             }
                             handled = true;
                         } else if (this._allowUnknownOption) {
-                            // Store unknown option if allowed - don't count as arguments
-                            unknownOptions.push(arg);
+                            // Store unknown option if allowed - add to arguments
+                            args.push(arg);
                             if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-                                unknownOptions.push(argv[++i]);
+                                args.push(argv[++i]);
                             }
                             handled = true;
                         }
@@ -2519,8 +2793,8 @@ Expecting one of '${allowedValues.join("', '")}'`);
             const requiredArgCount = this.registeredArguments.filter(arg => arg.required).length;
             const maxArgCount = hasVariadicArg ? Infinity : this.registeredArguments.length;
             
-            // Only check for excess arguments if we have registered arguments
-            if (this.registeredArguments.length > 0 && args.length > maxArgCount && !this._allowExcessArguments) {
+            // Only check for excess arguments if we have registered arguments and strict parsing is enabled
+            if (this.registeredArguments.length > 0 && args.length > maxArgCount && !this._allowExcessArguments && !this._passThroughOptions) {
                 if (this._excessArgumentHandler) {
                     try {
                         this._excessArgumentHandler(args.slice(this.registeredArguments.length));
@@ -2545,11 +2819,8 @@ Expecting one of '${allowedValues.join("', '")}'`);
             // Create final options object with proper precedence
             const options = this._buildFinalOptionsObject(processedOptions);
 
-            // Add unknown options back to args if pass-through is enabled
+            // Use processed arguments if available
             let finalArgs = this.processedArgs || args;
-            if (this._passThroughOptions && unknownOptions.length > 0) {
-                finalArgs = [...finalArgs, ...unknownOptions];
-            }
 
             // Execute action if available
             if (this._actionHandler) {
@@ -2841,10 +3112,13 @@ Expecting one of '${allowedValues.join("', '")}'`);
         try {
             // Handle negatable options - determine if this is the negated form
             let finalValue = value;
+            let isNegated = false;
+            
             if (option.negatable) {
-                // Check if the flag name indicates negation
+                // Check if the flag name indicates negation or value is explicitly false
                 if (flagName.includes('no-') || value === false) {
                     finalValue = false;
+                    isNegated = true;
                 } else if (option.isBoolean()) {
                     finalValue = true;
                 }
@@ -2856,51 +3130,58 @@ Expecting one of '${allowedValues.join("', '")}'`);
             // Handle variadic options specially
             if (option.variadic) {
                 const currentValue = this.getOptionValue(option.attributeName());
-                processedValue = option._collectValue(finalValue, currentValue);
                 
-                // Process through option processor if available
-                // Skip option processor for variadic options with custom parsers to avoid conflicts
-                if (this._optionProcessor && this._optionProcessor.processOption && !option.parseArg) {
+                // Apply custom parser to individual values if available
+                if (option.parseArg && finalValue !== undefined && finalValue !== null && !isNegated) {
                     try {
-                        this._optionProcessor.processOption(flagName, finalValue);
-                        // Get the processed value from the option processor for variadic options
-                        const processorValue = this._optionProcessor.getValue(option.attributeName());
-                        if (processorValue !== undefined) {
-                            processedValue = processorValue;
-                        }
+                        const valueToProcess = typeof finalValue === 'string' ? finalValue : String(finalValue);
+                        const parsedValue = option.parseArg(valueToProcess, undefined);
+                        // Collect the parsed value
+                        processedValue = option._collectValue(parsedValue, currentValue);
                     } catch (error) {
-                        // For variadic options, continue with local processing if processor fails
-                        console.warn(`Option processor warning for ${flagName}: ${error.message}`);
+                        throw new CommanderError(`Invalid value for variadic option ${flagName}: ${error.message}`);
                     }
+                } else {
+                    // No custom parser, just collect the value
+                    processedValue = option._collectValue(finalValue, currentValue);
                 }
                 
                 this.setOptionValueWithSource(option.attributeName(), processedValue, 'cli');
             } else {
-                // Process through option processor for validation and parsing if available
-                // Skip option processor if the option has a custom parser to avoid conflicts
-                if (this._optionProcessor && this._optionProcessor.processOption && !option.parseArg) {
-                    try {
-                        this._optionProcessor.processOption(flagName, finalValue);
-                        // Get the processed value from the option processor
-                        const processorValue = this._optionProcessor.getValue(option.attributeName());
-                        if (processorValue !== undefined) {
-                            processedValue = processorValue;
+                // Apply custom parser if available
+                if (option.parseArg && finalValue !== undefined && finalValue !== null && !isNegated) {
+                    const currentValue = this.getOptionValue(option.attributeName());
+                    
+                    // Skip parsing if the current value is already processed (not a string)
+                    // This prevents double-parsing when the option is processed multiple times
+                    if (currentValue !== undefined && typeof currentValue !== 'string' && typeof finalValue === 'string') {
+                        // The option has already been parsed, use the current value
+                        processedValue = currentValue;
+                    } else {
+                        try {
+                            // Ensure we pass a string to the custom parser
+                            let valueToProcess = finalValue;
+                            
+                            // Convert to string if not already a string
+                            if (typeof valueToProcess !== 'string') {
+                                valueToProcess = String(valueToProcess);
+                            }
+                            
+                            // Call the parser with the correct arguments
+                            processedValue = option.parseArg(valueToProcess, currentValue);
+                        } catch (error) {
+                            throw new CommanderError(`Invalid value for option ${flagName}: ${error.message}`);
                         }
-                    } catch (error) {
-                        // Continue with local processing if processor fails
-                        console.warn(`Option processor warning for ${flagName}: ${error.message}`);
                     }
+                } else {
+                    // No custom parser, use the final value as-is
+                    processedValue = finalValue;
                 }
                 
-                // Apply custom parser if available (after processor)
-                if (option.parseArg && processedValue !== undefined && processedValue !== null) {
-                    const currentValue = this.getOptionValue(option.attributeName());
-                    try {
-                        // Ensure we pass a string to the custom parser
-                        const valueToProcess = typeof processedValue === 'string' ? processedValue : String(processedValue);
-                        processedValue = option.parseArg(valueToProcess, currentValue);
-                    } catch (error) {
-                        throw new CommanderError(`Invalid value for option ${flagName}: ${error.message}`);
+                // Validate choices after parsing
+                if (option.argChoices && processedValue !== undefined && processedValue !== null && !isNegated) {
+                    if (!option.argChoices.includes(processedValue)) {
+                        throw new CommanderError(`Invalid choice for option ${option.flags}. Expected one of: ${option.argChoices.join(', ')}`);
                     }
                 }
                 
@@ -2911,6 +3192,9 @@ Expecting one of '${allowedValues.join("', '")}'`);
                 this.emit(`option:${option.name()}`, processedValue);
             }
         } catch (error) {
+            if (error instanceof CommanderError) {
+                throw error;
+            }
             throw new CommanderError(`Error processing option ${flagName}: ${error.message}`);
         }
     }
@@ -3033,7 +3317,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
                         const conflictIsSet = conflictValue !== undefined && conflictSource !== 'default';
                         
                         if (conflictIsSet) {
-                            throw new CommanderError(`Conflicting options: ${option.flags} and ${conflictOption.flags}`);
+                            throw new CommanderError(`Option ${option.flags} cannot be used with option ${conflictOption.flags}`);
                         }
                     }
                 }
@@ -3130,7 +3414,17 @@ Expecting one of '${allowedValues.join("', '")}'`);
             
             // If no value set through command, check processed options
             if (value === undefined) {
-                value = processedOptions[key] || processedOptions[option.long] || processedOptions[option.short];
+                value = processedOptions[key];
+                
+                // Also check by option name variations
+                if (value === undefined && option.long) {
+                    const longName = option.long.replace(/^--/, '');
+                    value = processedOptions[longName];
+                }
+                if (value === undefined && option.short) {
+                    const shortName = option.short.replace(/^-/, '');
+                    value = processedOptions[shortName];
+                }
             }
             
             // Handle environment variables with proper precedence
@@ -3139,6 +3433,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
                     value = option.parseArg ? 
                         option.parseArg(process.env[option.envVar], option.defaultValue) : 
                         process.env[option.envVar];
+                    this.setOptionValueWithSource(key, value, 'env');
                 } catch (error) {
                     throw new CommanderError(`Invalid environment variable value for ${option.flags}: ${error.message}`);
                 }
@@ -3147,9 +3442,19 @@ Expecting one of '${allowedValues.join("', '")}'`);
             // Fall back to default value
             if (value === undefined && option.defaultValue !== undefined) {
                 value = option.defaultValue;
+                this.setOptionValueWithSource(key, value, 'default');
             }
             
-            options[key] = value;
+            // For variadic options, ensure we always have an array
+            if (option.variadic && value === undefined) {
+                value = [];
+                this.setOptionValueWithSource(key, value, 'default');
+            }
+            
+            // Store the final value
+            if (value !== undefined) {
+                options[key] = value;
+            }
         }
         
         return options;
@@ -3334,7 +3639,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
                     }
                     
                     // Test choices validation
-                    if (option.choices && !option.choices.includes(envValue)) {
+                    if (option.argChoices && !option.argChoices.includes(envValue)) {
                         errors.push({
                             option: option.flags,
                             envVar: option.envVar,
@@ -4543,6 +4848,242 @@ Expecting one of '${allowedValues.join("', '")}'`);
                 }
             });
         });
+    }
+
+    /**
+     * Handle missing mandatory option value error
+     */
+    missingMandatoryOptionValue(option) {
+        const message = `error: required option '${option.flags}' not specified`;
+        this.outputError(message);
+        
+        if (this._showHelpAfterError) {
+            this.outputError('');
+            if (typeof this._showHelpAfterError === 'string') {
+                this.outputError(this._showHelpAfterError);
+            } else {
+                this.outputHelp({ error: true });
+            }
+        }
+        
+        this._exit(1, 'commander.missingMandatoryOptionValue', message);
+    }
+
+    /**
+     * Handle unknown option error
+     */
+    unknownOption(flag) {
+        const message = `error: unknown option '${flag}'`;
+        this.outputError(message);
+        this._exit(1, 'commander.unknownOption', message);
+    }
+
+    /**
+     * Handle missing option argument error
+     */
+    optionMissingArgument(option) {
+        const message = `error: option '${option.flags}' argument missing`;
+        this.outputError(message);
+        this._exit(1, 'commander.optionMissingArgument', message);
+    }
+
+    /**
+     * Handle missing required argument error
+     */
+    missingArgument(name) {
+        const message = `error: missing required argument '${name}'`;
+        this.outputError(message);
+        this._exit(1, 'commander.missingArgument', message);
+    }
+
+    /**
+     * Handle unknown command error
+     */
+    unknownCommand() {
+        const unknownName = this.args[0];
+        let message = `error: unknown command '${unknownName}'`;
+        
+        // Add available commands if any
+        if (this.commands.length > 0) {
+            const commandNames = this.commands.map(cmd => cmd.name()).filter(name => name);
+            message += `\nAvailable commands: ${commandNames.join(', ')}`;
+        }
+        
+        // Add suggestion if configured
+        if (this._showSuggestionAfterError) {
+            const suggestion = this.generateSuggestion(unknownName);
+            if (suggestion) {
+                message += `\n${suggestion}`;
+            }
+        }
+        
+        this.outputError(message);
+        this._exit(1, 'commander.unknownCommand', message);
+    }
+
+    /**
+     * Generate suggestion for unknown command
+     */
+    generateSuggestion(unknownName) {
+        if (this._suggestionGenerator) {
+            const commandNames = this.commands.map(cmd => cmd.name()).filter(name => name);
+            return this._suggestionGenerator(unknownName, commandNames);
+        }
+        
+        // Default suggestion logic - find closest match
+        const commandNames = this.commands.map(cmd => cmd.name()).filter(name => name);
+        const suggestion = this._findClosestMatch(unknownName, commandNames);
+        
+        if (suggestion) {
+            return `Did you mean '${suggestion}'?`;
+        }
+        
+        return null;
+    }
+
+    /**
+     * Find closest match using simple string distance
+     */
+    _findClosestMatch(target, candidates) {
+        if (!candidates.length) return null;
+        
+        let bestMatch = null;
+        let bestDistance = Infinity;
+        
+        for (const candidate of candidates) {
+            const distance = this._levenshteinDistance(target, candidate);
+            if (distance < bestDistance && distance <= Math.max(2, target.length / 2)) {
+                bestDistance = distance;
+                bestMatch = candidate;
+            }
+        }
+        
+        return bestMatch;
+    }
+
+    /**
+     * Calculate Levenshtein distance between two strings
+     */
+    _levenshteinDistance(a, b) {
+        const matrix = [];
+        
+        for (let i = 0; i <= b.length; i++) {
+            matrix[i] = [i];
+        }
+        
+        for (let j = 0; j <= a.length; j++) {
+            matrix[0][j] = j;
+        }
+        
+        for (let i = 1; i <= b.length; i++) {
+            for (let j = 1; j <= a.length; j++) {
+                if (b.charAt(i - 1) === a.charAt(j - 1)) {
+                    matrix[i][j] = matrix[i - 1][j - 1];
+                } else {
+                    matrix[i][j] = Math.min(
+                        matrix[i - 1][j - 1] + 1,
+                        matrix[i][j - 1] + 1,
+                        matrix[i - 1][j] + 1
+                    );
+                }
+            }
+        }
+        
+        return matrix[b.length][a.length];
+    }
+
+    /**
+     * Set custom suggestion generator
+     */
+    setSuggestionGenerator(generator) {
+        this._suggestionGenerator = generator;
+        return this;
+    }
+
+    /**
+     * Set custom unknown option handler
+     */
+    setUnknownOptionHandler(handler) {
+        this._unknownOptionHandler = handler;
+        return this;
+    }
+
+    /**
+     * Set custom excess argument handler
+     */
+    setExcessArgumentHandler(handler) {
+        this._excessArgumentHandler = handler;
+        return this;
+    }
+
+    /**
+     * Output error message
+     */
+    outputError(str) {
+        if (this._outputConfiguration && this._outputConfiguration.writeErr) {
+            this._outputConfiguration.writeErr(str + '\n');
+        } else {
+            process.stderr.write(str + '\n', 'utf8');
+        }
+    }
+
+    /**
+     * Write output message
+     */
+    writeOut(str) {
+        if (this._outputConfiguration && this._outputConfiguration.writeOut) {
+            this._outputConfiguration.writeOut(str);
+        } else {
+            process.stdout.write(str);
+        }
+    }
+
+    /**
+     * Configure error handling
+     */
+    configureError(config) {
+        if (config.showHelpAfterError !== undefined) {
+            this._showHelpAfterError = config.showHelpAfterError;
+        }
+        if (config.showSuggestionAfterError !== undefined) {
+            this._showSuggestionAfterError = config.showSuggestionAfterError;
+        }
+        if (config.suggestionGenerator !== undefined) {
+            this._suggestionGenerator = config.suggestionGenerator;
+        }
+        return this;
+    }
+
+    /**
+     * Handle conflicting options error
+     */
+    _conflictingOption(option, conflictingOption) {
+        const message = `Option ${option.flags} cannot be used with option ${conflictingOption.flags}`;
+        throw new CommanderError(message);
+    }
+
+    /**
+     * Internal exit method with error handling
+     */
+    _exit(exitCode, code, message) {
+        if (this._exitCallback) {
+            this._exitCallback(new CommanderError(exitCode, code, message));
+            return;
+        }
+        process.exit(exitCode);
+    }
+
+    /**
+     * Error method for throwing CommanderError
+     */
+    error(message, exitCode = 1, code = 'commander.error') {
+        const error = new CommanderError(exitCode, code, message);
+        if (this._exitCallback) {
+            this._exitCallback(error);
+        } else {
+            this.outputError(message);
+            process.exit(exitCode);
+        }
     }
 }
 

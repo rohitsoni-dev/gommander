@@ -607,6 +607,16 @@ const OptionParsers = {
    * @returns {number} - The parsed integer
    */
   int: (value) => {
+    // Handle different input types
+    if (typeof value === 'number') {
+      return Math.floor(value);
+    }
+    if (value === null || value === undefined) {
+      throw new Error(`Invalid integer: ${value}`);
+    }
+    if (typeof value !== 'string') {
+      value = String(value);
+    }
     const parsed = parseInt(value, 10);
     if (isNaN(parsed)) {
       throw new Error(`Invalid integer: ${value}`);
@@ -620,6 +630,16 @@ const OptionParsers = {
    * @returns {number} - The parsed float
    */
   float: (value) => {
+    // Handle different input types
+    if (typeof value === 'number') {
+      return value;
+    }
+    if (value === null || value === undefined) {
+      throw new Error(`Invalid float: ${value}`);
+    }
+    if (typeof value !== 'string') {
+      value = String(value);
+    }
     const parsed = parseFloat(value);
     if (isNaN(parsed)) {
       throw new Error(`Invalid float: ${value}`);
@@ -633,6 +653,13 @@ const OptionParsers = {
    * @returns {boolean} - The parsed boolean
    */
   boolean: (value) => {
+    // Handle different input types
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value !== 'string') {
+      value = String(value);
+    }
     const lower = value.toLowerCase();
     if (['true', 't', 'yes', 'y', '1', 'on', 'enable', 'enabled'].includes(lower)) {
       return true;
@@ -649,6 +676,19 @@ const OptionParsers = {
    * @returns {string[]} - The parsed array
    */
   list: (value) => {
+    // Handle different input types
+    if (Array.isArray(value)) {
+      return value;
+    }
+    if (value === null || value === undefined) {
+      return [];
+    }
+    if (typeof value !== 'string') {
+      value = String(value);
+    }
+    if (value === '') {
+      return [];
+    }
     return value.split(',').map(item => item.trim()).filter(item => item.length > 0);
   },
 
@@ -658,6 +698,16 @@ const OptionParsers = {
    * @returns {*} - The parsed JSON value
    */
   json: (value) => {
+    // Handle different input types
+    if (typeof value === 'object' && value !== null) {
+      return value; // Already parsed
+    }
+    if (value === null || value === undefined) {
+      throw new Error(`Invalid JSON: "${value}" is not valid JSON`);
+    }
+    if (typeof value !== 'string') {
+      throw new Error(`Invalid JSON: "${value}" is not valid JSON`);
+    }
     try {
       return JSON.parse(value);
     } catch (error) {
