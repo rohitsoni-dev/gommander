@@ -1,6 +1,6 @@
 {
   "name": "gocommander",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A high-performance Go-based port of Commander.js compiled to WebAssembly. Drop-in replacement with identical API and 2-5x better performance.",
   "main": "lib/index.js",
   "module": "lib/index.esm.js",
@@ -62,11 +62,13 @@
     "release:minor": "node scripts/prepare-release.js minor",
     "release:major": "node scripts/prepare-release.js major",
     "release:prepare": "node scripts/prepare-release.js",
+    "release:final": "npm run build && npm run test:ci && npm run validate:release && echo 'Ready for npm publish'",
     "version:info": "node scripts/version-manager.js info",
     "version:bump": "node scripts/version-manager.js bump",
     "version:set": "node scripts/version-manager.js set",
     "validate": "node scripts/quick-validate.js",
     "validate:full": "node scripts/validate-release.js",
+    "validate:release": "node scripts/validate-release.js",
     "docs:serve": "node scripts/serve-docs.js",
     "examples:run": "node examples/run-examples.js"
   },

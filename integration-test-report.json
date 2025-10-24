@@ -7,36 +7,58 @@
     "hostname": "DESKTOP-QP19VI3",
     "cpus": 8,
     "memory": 22,
-    "startTime": "2025-10-23T12:25:59.483Z"
+    "startTime": "2025-10-24T10:21:22.181Z"
   },
   "categories": {
     "comprehensive-e2e": {
       "name": "Comprehensive End-to-End Integration",
-      "passed": true,
-      "duration": 5284,
-      "description": "Complete integration testing with WASM compilation and real-world scenarios"
+      "passed": false,
+      "duration": 18324,
+      "description": "Complete integration testing with WASM compilation and real-world scenarios",
+      "error": "Command failed: npx jest --testPathPattern tests/integration/comprehensive-e2e.test.js --testTimeout 120000 --verbose --no-cache --forceExit --detectOpenHandles --maxWorkers=1\n\u001b[33m\u001b[1m\u001b[1m●\u001b[22m\u001b[1m Validation Warning\u001b[22m:\u001b[39m\n\u001b[33m\u001b[39m\n\u001b[33m  Unknown option \u001b[1m\"testTimeout\"\u001b[22m with value \u001b[1m10000\u001b[22m was found.\u001b[39m\n\u001b[33m  This is probably a typing mistake. Fixing it will remove this message.\u001b[39m\n\u001b[33m\u001b[39m\n\u001b[33m  \u001b[1mConfiguration Documentation:\u001b[22m\u001b[39m\n\u001b[33m  https://jestjs.io/doc"
     },
     "enhanced-e2e": {
       "name": "Enhanced End-to-End WASM Integration",
       "passed": false,
-      "duration": 5177,
+      "duration": 13199,
       "description": "Enhanced WASM integration tests with advanced features",
       "error": "Command failed: npx jest --testPathPattern tests/integration/enhanced-e2e.test.js --testTimeout 90000 --verbose --no-cache --forceExit --detectOpenHandles --maxWorkers=1\n\u001b[33m\u001b[1m\u001b[1m●\u001b[22m\u001b[1m Validation Warning\u001b[22m:\u001b[39m\n\u001b[33m\u001b[39m\n\u001b[33m  Unknown option \u001b[1m\"testTimeout\"\u001b[22m with value \u001b[1m10000\u001b[22m was found.\u001b[39m\n\u001b[33m  This is probably a typing mistake. Fixing it will remove this message.\u001b[39m\n\u001b[33m\u001b[39m\n\u001b[33m  \u001b[1mConfiguration Documentation:\u001b[22m\u001b[39m\n\u001b[33m  https://jestjs.io/docs/conf"
     },
     "e2e": {
       "name": "End-to-End WASM Integration",
       "passed": false,
-      "duration": 5269,
+      "duration": 11725,
       "description": "Core WASM integration and functionality tests",
       "error": "Command failed: npx jest --testPathPattern tests/integration/e2e-wasm.test.js --testTimeout 60000 --verbose --no-cache --forceExit --detectOpenHandles --maxWorkers=1\n\u001b[33m\u001b[1m\u001b[1m●\u001b[22m\u001b[1m Validation Warning\u001b[22m:\u001b[39m\n\u001b[33m\u001b[39m\n\u001b[33m  Unknown option \u001b[1m\"testTimeout\"\u001b[22m with value \u001b[1m10000\u001b[22m was found.\u001b[39m\n\u001b[33m  This is probably a typing mistake. Fixing it will remove this message.\u001b[39m\n\u001b[33m\u001b[39m\n\u001b[33m  \u001b[1mConfiguration Documentation:\u001b[22m\u001b[39m\n\u001b[33m  https://jestjs.io/docs/configur"
+    },
+    "compatibility": {
+      "name": "Commander.js Compatibility",
+      "passed": false,
+      "duration": 13117,
+      "description": "API compatibility validation against Commander.js",
+      "error": "Command failed: npx jest --testPathPattern tests/integration/commander-compatibility.test.js --testTimeout 45000 --verbose --no-cache --forceExit --detectOpenHandles --maxWorkers=1\n\u001b[33m\u001b[1m\u001b[1m●\u001b[22m\u001b[1m Validation Warning\u001b[22m:\u001b[39m\n\u001b[33m\u001b[39m\n\u001b[33m  Unknown option \u001b[1m\"testTimeout\"\u001b[22m with value \u001b[1m10000\u001b[22m was found.\u001b[39m\n\u001b[33m  This is probably a typing mistake. Fixing it will remove this message.\u001b[39m\n\u001b[33m\u001b[39m\n\u001b[33m  \u001b[1mConfiguration Documentation:\u001b[22m\u001b[39m\n\u001b[33m  https://jestjs.i"
+    },
+    "cross-platform": {
+      "name": "Cross-Platform Compatibility",
+      "passed": false,
+      "duration": 11981,
+      "description": "Platform-specific compatibility and feature testing",
+      "error": "Command failed: npx jest --testPathPattern tests/integration/cross-platform.test.js --testTimeout 60000 --verbose --no-cache --forceExit --detectOpenHandles --maxWorkers=1\n\u001b[33m\u001b[1m\u001b[1m●\u001b[22m\u001b[1m Validation Warning\u001b[22m:\u001b[39m\n\u001b[33m\u001b[39m\n\u001b[33m  Unknown option \u001b[1m\"testTimeout\"\u001b[22m with value \u001b[1m10000\u001b[22m was found.\u001b[39m\n\u001b[33m  This is probably a typing mistake. Fixing it will remove this message.\u001b[39m\n\u001b[33m\u001b[39m\n\u001b[33m  \u001b[1mConfiguration Documentation:\u001b[22m\u001b[39m\n\u001b[33m  https://jestjs.io/docs/co"
+    },
+    "performance": {
+      "name": "Performance Benchmarks",
+      "passed": false,
+      "duration": 46204,
+      "description": "Performance benchmarking and regression testing",
+      "error": "spawnSync C:\\Windows\\system32\\cmd.exe ENOBUFS"
     }
   },
   "summary": {
-    "totalCategories": 3,
-    "passedCategories": 1,
-    "failedCategories": 2,
-    "totalDuration": 21818,
-    "successRate": "33.3",
-    "endTime": "2025-10-23T12:26:21.241Z"
+    "totalCategories": 6,
+    "passedCategories": 0,
+    "failedCategories": 6,
+    "totalDuration": 126735,
+    "successRate": "0.0",
+    "endTime": "2025-10-24T10:23:28.820Z"
   }
 }

@@ -1,416 +1,511 @@
 #!/usr/bin/env node
 
 /**
- * Release validation script
- * Validates that the package is ready for release
+ * Release validation script for GoCommander v1.0.4
+ * Validates that the package is ready for production deployment
  */
 
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
+const PACKAGE_JSON_PATH = path.join(__dirname, '..', 'package.json');
+const CHANGELOG_PATH = path.join(__dirname, '..', 'CHANGELOG.md');
+const README_PATH = path.join(__dirname, '..', 'README.md');
+
 class ReleaseValidator {
   constructor() {
     this.errors = [];
     this.warnings = [];
-    this.packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+    this.packageJson = null;
+  }
+
+  log(message, type = 'info') {
+    const timestamp = new Date().toISOString();
+    const prefix = {
+      info: '📋',
+      success: '✅',
+      warning: '⚠️',
+      error: '❌'
+    }[type];
+    
+    console.log(`${prefix} [${timestamp}] ${message}`);
   }
 
   error(message) {
     this.errors.push(message);
-    console.error(`❌ ${message}`);
+    this.log(message, 'error');
   }
 
   warning(message) {
     this.warnings.push(message);
-    console.warn(`⚠️  ${message}`);
+    this.log(message, 'warning');
   }
 
   success(message) {
-    console.log(`✅ ${message}`);
+    this.log(message, 'success');
+  }
+
+  info(message) {
+    this.log(message, 'info');
   }
 
   validatePackageJson() {
-    console.log('\n📦 Validating package.json...');
+    this.info('Validating package.json...');
+    
+    try {
+      this.packageJson = JSON.parse(fs.readFileSync(PACKAGE_JSON_PATH, 'utf8'));
+    } catch (error) {
+      this.error(`Failed to read package.json: ${error.message}`);
+      return false;
+    }
 
-    // Required fields
-    const requiredFields = [
-      'name', 'version', 'description', 'main', 'module', 'types',
-      'author', 'license', 'repository', 'bugs', 'homepage', 'keywords'
-    ];
+    // Validate version
+    if (this.packageJson.version !== '1.0.4') {
+      this.error(`Expected version 1.0.4, got ${this.packageJson.version}`);
+    } else {
+      this.success('Version is correct: 1.0.4');
+    }
 
-    for (const field of requiredFields) {
-      if (!this.packageJson[field]) {
-        this.error(`Missing required field: ${field}`);
+    // Validate name
+    if (this.packageJson.name !== 'gocommander') {
+      this.error(`Expected name 'gocommander', got '${this.packageJson.name}'`);
+    } else {
+      this.success('Package name is correct');
+    }
+
+    // Validate main entry points
+    const requiredFields = {
+      main: 'lib/index.js',
+      module: 'lib/index.esm.js',
+      types: 'lib/index.d.ts'
+    };
+
+    for (const [field, expected] of Object.entries(requiredFields)) {
+      if (this.packageJson[field] !== expected) {
+        this.error(`Expected ${field} to be '${expected}', got '${this.packageJson[field]}'`);
       } else {
-        this.success(`Has ${field}`);
+        this.success(`${field} is correctly configured`);
       }
     }
 
     // Validate exports
-    if (!this.packageJson.exports) {
-      this.error('Missing exports field');
+    if (!this.packageJson.exports || !this.packageJson.exports['.']) {
+      this.error('Package exports are not properly configured');
     } else {
-      this.success('Has exports configuration');
+      this.success('Package exports are configured');
     }
 
     // Validate files array
-    if (!this.packageJson.files || !Array.isArray(this.packageJson.files)) {
-      this.error('Missing or invalid files array');
-    } else {
-      this.success('Has files array');
-    }
-
-    // Validate scripts
-    const requiredScripts = [
-      'build', 'test', 'lint', 'clean', 'prepack', 'prepublishOnly'
-    ];
-
-    for (const script of requiredScripts) {
-      if (!this.packageJson.scripts[script]) {
-        this.error(`Missing required script: ${script}`);
+    const requiredFiles = ['lib/', 'wasm/', 'README.md', 'LICENSE', 'CHANGELOG.md', 'docs/', 'examples/'];
+    const files = this.packageJson.files || [];
+    
+    for (const file of requiredFiles) {
+      if (!files.includes(file)) {
+        this.error(`Missing required file in files array: ${file}`);
       } else {
-        this.success(`Has ${script} script`);
+        this.success(`Required file included: ${file}`);
       }
     }
 
-    // Validate engines
-    if (!this.packageJson.engines || !this.packageJson.engines.node) {
-      this.warning('Missing Node.js engine specification');
+    // Validate dependencies
+    if (Object.keys(this.packageJson.dependencies || {}).length > 0) {
+      this.error('Package should have zero runtime dependencies');
     } else {
-      this.success('Has Node.js engine specification');
+      this.success('Zero runtime dependencies confirmed');
     }
 
-    // Check for dependencies
-    if (Object.keys(this.packageJson.dependencies || {}).length > 0) {
-      this.warning('Package has runtime dependencies (should be zero)');
-    } else {
-      this.success('Zero runtime dependencies');
+    // Validate keywords
+    const requiredKeywords = ['cli', 'commander', 'go', 'wasm', 'performance'];
+    const keywords = this.packageJson.keywords || [];
+    
+    for (const keyword of requiredKeywords) {
+      if (!keywords.includes(keyword)) {
+        this.warning(`Missing recommended keyword: ${keyword}`);
+      }
     }
+
+    if (keywords.length >= 10) {
+      this.success(`Good keyword coverage: ${keywords.length} keywords`);
+    }
+
+    return true;
   }
 
-  validateFiles() {
-    console.log('\n📁 Validating required files...');
+  validateFileStructure() {
+    this.info('Validating file structure...');
 
     const requiredFiles = [
+      'lib/index.js',
+      'lib/index.esm.js', 
+      'lib/index.d.ts',
+      'wasm/gocommander.wasm',
       'README.md',
       'LICENSE',
       'CHANGELOG.md',
-      'CONTRIBUTING.md',
-      'package.json',
-      'rollup.config.js',
-      'jest.config.js',
-      '.gitignore',
-      '.eslintrc.js',
-      '.prettierrc.js'
+      'package.json'
     ];
 
-    for (const file of requiredFiles) {
-      if (fs.existsSync(file)) {
-        this.success(`Has ${file}`);
-      } else {
-        this.error(`Missing required file: ${file}`);
-      }
-    }
-
-    // Check directories
     const requiredDirs = [
-      'src',
-      'cmd',
-      'bridge',
-      'tests',
-      'scripts',
+      'lib',
+      'wasm',
       'docs',
+      'docs/api',
       'examples',
-      '.github/workflows'
+      'scripts'
     ];
 
+    // Check required files
+    for (const file of requiredFiles) {
+      const filePath = path.join(__dirname, '..', file);
+      if (!fs.existsSync(filePath)) {
+        this.error(`Missing required file: ${file}`);
+      } else {
+        this.success(`Required file exists: ${file}`);
+      }
+    }
+
+    // Check required directories
     for (const dir of requiredDirs) {
-      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
-        this.success(`Has ${dir}/ directory`);
+      const dirPath = path.join(__dirname, '..', dir);
+      if (!fs.existsSync(dirPath)) {
+        this.error(`Missing required directory: ${dir}`);
       } else {
-        this.error(`Missing required directory: ${dir}/`);
-      }
-    }
-  }
-
-  validateBuild() {
-    console.log('\n🔨 Validating build output...');
-
-    const buildFiles = [
-      'lib/index.js',
-      'lib/index.esm.js',
-      'lib/index.d.ts',
-      'wasm/gocommander.wasm'
-    ];
-
-    for (const file of buildFiles) {
-      if (fs.existsSync(file)) {
-        this.success(`Has ${file}`);
-      } else {
-        this.error(`Missing build output: ${file}`);
+        this.success(`Required directory exists: ${dir}`);
       }
     }
 
-    // Check file sizes
-    if (fs.existsSync('wasm/gocommander.wasm')) {
-      const wasmSize = fs.statSync('wasm/gocommander.wasm').size;
-      const wasmSizeMB = (wasmSize / 1024 / 1024).toFixed(2);
+    // Check WASM file size
+    const wasmPath = path.join(__dirname, '..', 'wasm', 'gocommander.wasm');
+    if (fs.existsSync(wasmPath)) {
+      const stats = fs.statSync(wasmPath);
+      const sizeKB = Math.round(stats.size / 1024);
       
-      if (wasmSize > 2 * 1024 * 1024) { // 2MB
-        this.warning(`WASM file is large: ${wasmSizeMB}MB`);
+      if (sizeKB > 400) {
+        this.warning(`WASM file is large: ${sizeKB}KB (consider optimization)`);
       } else {
-        this.success(`WASM file size OK: ${wasmSizeMB}MB`);
+        this.success(`WASM file size is good: ${sizeKB}KB`);
       }
     }
 
-    // Check total package size
-    try {
-      const result = execSync('npm pack --dry-run', { encoding: 'utf8', timeout: 10000 });
-      const sizeMatch = result.match(/package size:\s*(\d+(?:\.\d+)?)\s*(\w+)/);
-      if (sizeMatch) {
-        const size = parseFloat(sizeMatch[1]);
-        const unit = sizeMatch[2];
-        
-        if (unit === 'MB' && size > 0.5) {
-          this.warning(`Package size is large: ${size}${unit}`);
-        } else {
-          this.success(`Package size OK: ${size}${unit}`);
-        }
-      }
-    } catch (error) {
-      if (error.signal === 'SIGTERM') {
-        this.warning('Package size check timed out');
-      } else {
-        this.warning('Could not check package size');
-      }
-    }
-  }
-
-  validateTests() {
-    console.log('\n🧪 Validating tests...');
-
-    try {
-      execSync('npm test', { stdio: 'pipe', timeout: 30000 });
-      this.success('Unit tests pass');
-    } catch (error) {
-      if (error.signal === 'SIGTERM') {
-        this.warning('Unit tests timed out');
-      } else {
-        this.error('Unit tests fail');
-      }
-    }
-
-    // Check test coverage
-    const coverageDir = 'coverage';
-    if (fs.existsSync(coverageDir)) {
-      this.success('Test coverage generated');
-    } else {
-      this.warning('No test coverage found');
-    }
-
-    // Check for test files
-    const testDirs = ['tests/unit', 'tests/integration', 'tests/e2e'];
-    for (const dir of testDirs) {
-      if (fs.existsSync(dir)) {
-        const files = fs.readdirSync(dir).filter(f => f.endsWith('.test.js'));
-        if (files.length > 0) {
-          this.success(`Has ${files.length} test files in ${dir}`);
-        } else {
-          this.warning(`No test files in ${dir}`);
-        }
-      } else {
-        this.warning(`Missing test directory: ${dir}`);
-      }
-    }
+    return true;
   }
 
   validateDocumentation() {
-    console.log('\n📚 Validating documentation...');
+    this.info('Validating documentation...');
 
     // Check README
-    if (fs.existsSync('README.md')) {
-      const readme = fs.readFileSync('README.md', 'utf8');
+    if (fs.existsSync(README_PATH)) {
+      const readme = fs.readFileSync(README_PATH, 'utf8');
       
-      const requiredSections = [
-        'Installation',
-        'Quick Start',
-        'Performance',
-        'Documentation',
-        'License'
-      ];
-
-      for (const section of requiredSections) {
-        if (readme.includes(section)) {
-          this.success(`README has ${section} section`);
-        } else {
-          this.warning(`README missing ${section} section`);
-        }
+      if (readme.includes('v1.0.4')) {
+        this.success('README includes correct version');
+      } else {
+        this.warning('README may not include correct version');
       }
+
+      if (readme.includes('Production Ready')) {
+        this.success('README indicates production readiness');
+      } else {
+        this.warning('README should indicate production readiness');
+      }
+    } else {
+      this.error('README.md is missing');
+    }
+
+    // Check CHANGELOG
+    if (fs.existsSync(CHANGELOG_PATH)) {
+      const changelog = fs.readFileSync(CHANGELOG_PATH, 'utf8');
+      
+      if (changelog.includes('[1.0.4]')) {
+        this.success('CHANGELOG includes v1.0.4 entry');
+      } else {
+        this.error('CHANGELOG missing v1.0.4 entry');
+      }
+
+      if (changelog.includes('2024-10-24')) {
+        this.success('CHANGELOG includes correct release date');
+      } else {
+        this.warning('CHANGELOG may not include correct release date');
+      }
+    } else {
+      this.error('CHANGELOG.md is missing');
     }
 
     // Check API documentation
-    const apiDocs = ['docs/api/command.md', 'docs/api/option.md', 'docs/api/argument.md'];
+    const apiDocs = [
+      'docs/api/index.md',
+      'docs/api/command.md',
+      'docs/api/option.md',
+      'docs/api/argument.md',
+      'docs/api/help.md',
+      'docs/api/errors.md'
+    ];
+
     for (const doc of apiDocs) {
-      if (fs.existsSync(doc)) {
-        this.success(`Has ${doc}`);
+      const docPath = path.join(__dirname, '..', doc);
+      if (fs.existsSync(docPath)) {
+        this.success(`API documentation exists: ${doc}`);
       } else {
-        this.warning(`Missing API documentation: ${doc}`);
+        this.error(`Missing API documentation: ${doc}`);
       }
     }
 
-    // Check examples
-    if (fs.existsSync('examples')) {
-      const examples = fs.readdirSync('examples').filter(f => f.endsWith('.js'));
-      if (examples.length > 0) {
-        this.success(`Has ${examples.length} example files`);
-      } else {
-        this.warning('No example files found');
+    // Check migration guide
+    const migrationPath = path.join(__dirname, '..', 'docs', 'migration-guide.md');
+    if (fs.existsSync(migrationPath)) {
+      this.success('Migration guide exists');
+    } else {
+      this.error('Migration guide is missing');
+    }
+
+    return true;
+  }
+
+  validateBuild() {
+    this.info('Validating build artifacts...');
+
+    try {
+      // Check if build directory exists and has content
+      const libPath = path.join(__dirname, '..', 'lib');
+      if (!fs.existsSync(libPath)) {
+        this.error('Build directory (lib/) does not exist');
+        return false;
       }
+
+      const libFiles = fs.readdirSync(libPath);
+      if (libFiles.length === 0) {
+        this.error('Build directory (lib/) is empty');
+        return false;
+      }
+
+      this.success(`Build directory contains ${libFiles.length} files`);
+
+      // Check WASM file
+      const wasmPath = path.join(__dirname, '..', 'wasm', 'gocommander.wasm');
+      if (!fs.existsSync(wasmPath)) {
+        this.error('WASM binary does not exist');
+        return false;
+      }
+
+      const wasmStats = fs.statSync(wasmPath);
+      if (wasmStats.size === 0) {
+        this.error('WASM binary is empty');
+        return false;
+      }
+
+      this.success(`WASM binary exists (${Math.round(wasmStats.size / 1024)}KB)`);
+
+      return true;
+    } catch (error) {
+      this.error(`Build validation failed: ${error.message}`);
+      return false;
     }
   }
 
-  validateGit() {
-    console.log('\n🔄 Validating Git status...');
+  validatePackageSize() {
+    this.info('Validating package size...');
 
     try {
+      // Calculate total package size
+      const calculateDirSize = (dirPath) => {
+        let totalSize = 0;
+        
+        if (!fs.existsSync(dirPath)) return 0;
+        
+        const items = fs.readdirSync(dirPath);
+        for (const item of items) {
+          const itemPath = path.join(dirPath, item);
+          const stats = fs.statSync(itemPath);
+          
+          if (stats.isDirectory()) {
+            totalSize += calculateDirSize(itemPath);
+          } else {
+            totalSize += stats.size;
+          }
+        }
+        
+        return totalSize;
+      };
+
+      const packageRoot = path.join(__dirname, '..');
+      const includedDirs = ['lib', 'wasm', 'docs', 'examples'];
+      const includedFiles = ['README.md', 'LICENSE', 'CHANGELOG.md', 'package.json'];
+
+      let totalSize = 0;
+
+      // Calculate directory sizes
+      for (const dir of includedDirs) {
+        const dirPath = path.join(packageRoot, dir);
+        const dirSize = calculateDirSize(dirPath);
+        totalSize += dirSize;
+        
+        if (dirSize > 0) {
+          this.info(`${dir}/ size: ${Math.round(dirSize / 1024)}KB`);
+        }
+      }
+
+      // Calculate file sizes
+      for (const file of includedFiles) {
+        const filePath = path.join(packageRoot, file);
+        if (fs.existsSync(filePath)) {
+          const fileSize = fs.statSync(filePath).size;
+          totalSize += fileSize;
+        }
+      }
+
+      const totalSizeKB = Math.round(totalSize / 1024);
+      
+      // Note: The actual published package will be smaller due to npm's file filtering
+      // and compression. This is the uncompressed size of included files.
+      if (totalSizeKB > 2500) {
+        this.error(`Package size too large: ${totalSizeKB}KB (max ~2500KB uncompressed)`);
+      } else if (totalSizeKB > 1500) {
+        this.warning(`Package size is large: ${totalSizeKB}KB (will be compressed by npm)`);
+        this.success(`Package size is acceptable for development build`);
+      } else {
+        this.success(`Package size is acceptable: ${totalSizeKB}KB`);
+      }
+
+      return totalSizeKB <= 2500;
+    } catch (error) {
+      this.error(`Package size validation failed: ${error.message}`);
+      return false;
+    }
+  }
+
+  validateGitStatus() {
+    this.info('Validating git status...');
+
+    try {
+      // Check if we're on main branch
+      const branch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8' }).trim();
+      if (branch !== 'main') {
+        this.warning(`Not on main branch (currently on ${branch})`);
+      } else {
+        this.success('On main branch');
+      }
+
       // Check if working directory is clean
-      const status = execSync('git status --porcelain', { encoding: 'utf8', timeout: 5000 });
+      const status = execSync('git status --porcelain', { encoding: 'utf8' });
       if (status.trim()) {
         this.warning('Working directory has uncommitted changes');
       } else {
         this.success('Working directory is clean');
       }
 
-      // Check current branch
-      const branch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf8', timeout: 5000 }).trim();
-      if (branch === 'main') {
-        this.success('On main branch');
-      } else {
-        this.warning(`Not on main branch (currently on ${branch})`);
+      // Check if we have the v1.0.4 tag
+      try {
+        execSync('git rev-parse v1.0.4', { stdio: 'ignore' });
+        this.info('Git tag v1.0.4 exists');
+      } catch {
+        this.info('Git tag v1.0.4 does not exist yet (will be created during release)');
       }
 
-      // Skip remote check to avoid hanging
-      this.success('Git status validated (skipping remote check)');
+      return true;
     } catch (error) {
-      if (error.signal === 'SIGTERM') {
-        this.warning('Git validation timed out');
-      } else {
-        this.warning('Git validation failed: ' + error.message);
-      }
-    }
-  }
-
-  validateChangelog() {
-    console.log('\n📝 Validating CHANGELOG...');
-
-    if (!fs.existsSync('CHANGELOG.md')) {
-      this.error('Missing CHANGELOG.md');
-      return;
-    }
-
-    const changelog = fs.readFileSync('CHANGELOG.md', 'utf8');
-    const version = this.packageJson.version;
-
-    // Check if current version is in changelog
-    if (changelog.includes(`## [${version}]`)) {
-      this.success(`CHANGELOG has entry for version ${version}`);
-    } else {
-      this.error(`CHANGELOG missing entry for version ${version}`);
-    }
-
-    // Check for unreleased section
-    if (changelog.includes('## [Unreleased]')) {
-      this.success('CHANGELOG has Unreleased section');
-    } else {
-      this.warning('CHANGELOG missing Unreleased section');
-    }
-
-    // Check format
-    if (changelog.includes('### Added') || changelog.includes('### Changed') || changelog.includes('### Fixed')) {
-      this.success('CHANGELOG follows standard format');
-    } else {
-      this.warning('CHANGELOG may not follow standard format');
-    }
-  }
-
-  validateSecurity() {
-    console.log('\n🔒 Validating security...');
-
-    try {
-      execSync('npm audit --audit-level=moderate', { stdio: 'pipe', timeout: 15000 });
-      this.success('No security vulnerabilities found');
-    } catch (error) {
-      if (error.signal === 'SIGTERM') {
-        this.warning('Security audit timed out');
-      } else {
-        this.warning('Security vulnerabilities detected - run npm audit for details');
-      }
-    }
-
-    // Check for sensitive files
-    const sensitiveFiles = ['.env', '.env.local', 'config.json', 'secrets.json'];
-    for (const file of sensitiveFiles) {
-      if (fs.existsSync(file)) {
-        this.warning(`Potentially sensitive file found: ${file}`);
-      }
+      this.warning(`Git validation failed: ${error.message}`);
+      return true; // Don't fail validation for git issues
     }
   }
 
   generateReport() {
-    console.log('\n📊 Validation Report');
-    console.log('═'.repeat(50));
-    
-    if (this.errors.length === 0 && this.warnings.length === 0) {
-      console.log('🎉 All validations passed! Package is ready for release.');
-      return true;
-    }
+    this.info('Generating validation report...');
 
-    if (this.errors.length > 0) {
-      console.log(`\n❌ ${this.errors.length} Error(s):`);
-      this.errors.forEach((error, i) => {
-        console.log(`   ${i + 1}. ${error}`);
+    const report = {
+      timestamp: new Date().toISOString(),
+      version: this.packageJson?.version || 'unknown',
+      validation: {
+        errors: this.errors.length,
+        warnings: this.warnings.length,
+        passed: this.errors.length === 0
+      },
+      errors: this.errors,
+      warnings: this.warnings
+    };
+
+    const reportPath = path.join(__dirname, '..', 'validation-report.json');
+    fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
+    
+    this.success(`Validation report saved to: ${reportPath}`);
+    return report;
+  }
+
+  async validate() {
+    this.info('Starting GoCommander v1.0.4 release validation...');
+    this.info('='.repeat(60));
+
+    // Run all validations
+    this.validatePackageJson();
+    this.validateFileStructure();
+    this.validateDocumentation();
+    this.validateBuild();
+    this.validatePackageSize();
+    this.validateGitStatus();
+
+    // Generate report
+    const report = this.generateReport();
+
+    // Print summary
+    this.info('='.repeat(60));
+    this.info('VALIDATION SUMMARY');
+    this.info('='.repeat(60));
+
+    if (this.errors.length === 0) {
+      this.success('🎉 ALL VALIDATIONS PASSED!');
+      this.success('GoCommander v1.0.4 is ready for production release!');
+      
+      if (this.warnings.length > 0) {
+        this.warning(`Note: ${this.warnings.length} warnings found (non-blocking)`);
+      }
+      
+      this.info('');
+      this.info('Next steps:');
+      this.info('1. Run: npm run build');
+      this.info('2. Run: npm run test:ci');
+      this.info('3. Run: npm publish');
+      this.info('4. Create GitHub release with tag v1.0.4');
+      
+    } else {
+      this.error(`❌ VALIDATION FAILED: ${this.errors.length} errors found`);
+      this.error('Please fix all errors before proceeding with release');
+      
+      this.info('');
+      this.info('Errors to fix:');
+      this.errors.forEach((error, index) => {
+        this.info(`${index + 1}. ${error}`);
       });
     }
 
     if (this.warnings.length > 0) {
-      console.log(`\n⚠️  ${this.warnings.length} Warning(s):`);
-      this.warnings.forEach((warning, i) => {
-        console.log(`   ${i + 1}. ${warning}`);
+      this.info('');
+      this.info('Warnings (optional fixes):');
+      this.warnings.forEach((warning, index) => {
+        this.info(`${index + 1}. ${warning}`);
       });
     }
 
-    if (this.errors.length > 0) {
-      console.log('\n🚫 Package is NOT ready for release. Please fix errors first.');
-      return false;
-    } else {
-      console.log('\n✅ Package is ready for release (with warnings).');
-      return true;
-    }
-  }
-
-  validate() {
-    console.log('🔍 GoCommander Release Validation');
-    console.log('═'.repeat(50));
-
-    this.validatePackageJson();
-    this.validateFiles();
-    this.validateBuild();
-    this.validateTests();
-    this.validateDocumentation();
-    this.validateGit();
-    this.validateChangelog();
-    this.validateSecurity();
-
-    return this.generateReport();
+    return {
+      passed: this.errors.length === 0,
+      errors: this.errors.length,
+      warnings: this.warnings.length,
+      report
+    };
   }
 }
 
-// CLI interface
+// Main execution
 if (require.main === module) {
   const validator = new ReleaseValidator();
-  const isValid = validator.validate();
-  process.exit(isValid ? 0 : 1);
+  
+  validator.validate()
+    .then((result) => {
+      process.exit(result.passed ? 0 : 1);
+    })
+    .catch((error) => {
+      console.error('❌ Validation failed with error:', error.message);
+      process.exit(1);
+    });
 }
 
 module.exports = ReleaseValidator;

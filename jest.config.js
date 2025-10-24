@@ -17,7 +17,7 @@ module.exports = {
     'html'
   ],
   setupFilesAfterEnv: ['<rootDir>/tests/setup.js'],
-  testTimeout: 30000, // Increased for integration tests
+  // testTimeout: 30000, // Moved to project-specific configs
   verbose: true,
   // Separate test configurations for different test types
   projects: [

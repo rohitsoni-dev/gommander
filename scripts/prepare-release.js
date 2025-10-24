@@ -145,6 +145,16 @@ function prepareRelease(releaseType = 'patch') {
   // Run benchmarks
   runBenchmarks();
   
+  // Final validation
+  console.log('🔍 Running final release validation...');
+  try {
+    execSync('npm run validate:release', { stdio: 'inherit' });
+    console.log('✅ Final validation passed');
+  } catch (error) {
+    console.error('❌ Final validation failed:', error.message);
+    process.exit(1);
+  }
+  
   // Update version
   const oldVersion = getCurrentVersion();
   console.log(`📝 Updating version from ${oldVersion}...`);

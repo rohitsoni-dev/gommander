@@ -78,8 +78,8 @@ class OptionProcessor {
     // Apply postprocessing if available
     if (this.postprocessors.has(key)) {
       try {
-        const postProcessedValue = this.postprocessors.get(key)(processedValue);
-        this.values.set(key, postProcessedValue);
+        processedValue = this.postprocessors.get(key)(processedValue);
+        this.values.set(key, processedValue);
       } catch (error) {
         throw new Error(`Postprocessing failed for option ${flag}: ${error.message}`);
       }

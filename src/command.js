@@ -375,7 +375,12 @@ Expecting one of '${allowedValues.join("', '")}'`);
         // Add to legacy arrays
         this._options.push(option);
         this.options.push(option);
-        this._optionProcessor.addOption(option);
+        
+        // Only add to processor if not already added
+        const optionKey = this._optionProcessor._getOptionKey(option);
+        if (!this._optionProcessor.options.has(optionKey)) {
+            this._optionProcessor.addOption(option);
+        }
 
         // Auto-generate environment variable if enabled
         if (this._autoEnv && !option.envVar) {
@@ -617,14 +622,13 @@ Expecting one of '${allowedValues.join("', '")}'`);
     }
 
     action(fn) {
-        const listener = (args) => {
-            const expectedArgsCount = this.registeredArguments.length;
-            const actionArgs = args.slice(0, expectedArgsCount);
-            if (this._storeOptionsAsProperties) {
-                actionArgs[expectedArgsCount] = this;
-            } else {
-                actionArgs[expectedArgsCount] = this.opts();
-            }
+        const listener = (args, options) => {
+            // Use processed arguments if available, otherwise use raw args
+            const processedArgs = this.processedArgs || args;
+            const actionArgs = [...processedArgs];
+            
+            // Add options and command as final arguments
+            actionArgs.push(options || this.opts());
             actionArgs.push(this);
 
             return fn.apply(this, actionArgs);
@@ -636,17 +640,16 @@ Expecting one of '${allowedValues.join("', '")}'`);
 
     // Enhanced action methods for async support
     asyncAction(fn) {
-        const listener = async (args) => {
-            const expectedArgsCount = this.registeredArguments.length;
-            const actionArgs = args.slice(0, expectedArgsCount);
-            if (this._storeOptionsAsProperties) {
-                actionArgs[expectedArgsCount] = this;
-            } else {
-                actionArgs[expectedArgsCount] = this.opts();
-            }
+        const listener = async (args, options) => {
+            // Use processed arguments if available, otherwise use raw args
+            const processedArgs = this.processedArgs || args;
+            const actionArgs = [...processedArgs];
+            
+            // Add options and command as final arguments
+            actionArgs.push(options || this.opts());
             actionArgs.push(this);
 
-            return await fn.apply(this, actionArgs);
+            return fn.apply(this, actionArgs);
         };
         this._actionHandler = listener;
         this._action = fn;
@@ -2098,14 +2101,19 @@ Expecting one of '${allowedValues.join("', '")}'`);
         const processedArgs = [];
         this.registeredArguments.forEach((declaredArg, index) => {
             let value = declaredArg.defaultValue;
+            
             if (declaredArg.variadic) {
                 if (index < this.args.length) {
                     value = this.args.slice(index);
                     if (declaredArg.parseArg) {
-                        value = value.reduce((processed, v) => {
-                            return this._callParseArg(declaredArg, v, processed, 
-                                `error: command-argument value '${v}' is invalid for argument '${declaredArg.name()}'.`);
-                        }, declaredArg.defaultValue);
+                        value = value.map(v => {
+                            try {
+                                return this._callParseArg(declaredArg, v, declaredArg.defaultValue, 
+                                    `error: command-argument value '${v}' is invalid for argument '${declaredArg.name()}'.`);
+                            } catch (error) {
+                                throw new CommanderError(error.message);
+                            }
+                        });
                     }
                 } else if (value === undefined) {
                     value = [];
@@ -2113,10 +2121,22 @@ Expecting one of '${allowedValues.join("', '")}'`);
             } else if (index < this.args.length) {
                 value = this.args[index];
                 if (declaredArg.parseArg) {
-                    value = this._callParseArg(declaredArg, value, declaredArg.defaultValue,
-                        `error: command-argument value '${value}' is invalid for argument '${declaredArg.name()}'.`);
+                    try {
+                        value = this._callParseArg(declaredArg, value, declaredArg.defaultValue,
+                            `error: command-argument value '${value}' is invalid for argument '${declaredArg.name()}'.`);
+                    } catch (error) {
+                        throw new CommanderError(error.message);
+                    }
                 }
             }
+            
+            // Validate choices
+            if (declaredArg.argChoices && declaredArg.argChoices.length > 0 && value !== undefined) {
+                if (!declaredArg.argChoices.includes(value)) {
+                    throw new CommanderError(`error: invalid choice '${value}' for argument '${declaredArg.name()}'. Expected one of: ${declaredArg.argChoices.join(', ')}`);
+                }
+            }
+            
             // Validate required arguments
             if (declaredArg.required && (value === undefined || value === null)) {
                 this.missingArgument(declaredArg.name());
@@ -2249,7 +2269,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
             
             // Add all options to the processor with enhanced features
             for (const option of this.options) {
-                this._optionProcessor.addOption(option);
+                const optionKey = this._optionProcessor._getOptionKey(option);
+                if (!this._optionProcessor.options.has(optionKey)) {
+                    this._optionProcessor.addOption(option);
+                }
                 
                 // Set up environment variable handling
                 if (option.envVar && process.env[option.envVar]) {
@@ -2455,7 +2478,11 @@ Expecting one of '${allowedValues.join("', '")}'`);
             this._validateEnvironmentVariables();
 
             // Handle excess arguments if needed
-            if (args.length > this.registeredArguments.length && !this._allowExcessArguments) {
+            const hasVariadicArg = this.registeredArguments.some(arg => arg.variadic);
+            const requiredArgCount = this.registeredArguments.filter(arg => arg.required).length;
+            const maxArgCount = hasVariadicArg ? Infinity : this.registeredArguments.length;
+            
+            if (args.length > maxArgCount && !this._allowExcessArguments) {
                 if (this._excessArgumentHandler) {
                     try {
                         this._excessArgumentHandler(args.slice(this.registeredArguments.length));
@@ -2470,6 +2497,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
                 }
             }
 
+            // Store arguments for processing
+            this.args = args;
+            this._processArguments();
+
             // Get processed options with environment variable fallback
             const processedOptions = this._optionProcessor.getValues();
             
@@ -2477,11 +2508,11 @@ Expecting one of '${allowedValues.join("', '")}'`);
             const options = this._buildFinalOptionsObject(processedOptions);
 
             // Execute action if available
-            if (this._action) {
-                this._action(args, options);
+            if (this._actionHandler) {
+                this._actionHandler(this.processedArgs || args, options);
             }
 
-            return { options, arguments: args };
+            return { options, arguments: this.processedArgs || args };
         } catch (error) {
             if (error instanceof CommanderError) {
                 throw error;
@@ -3094,13 +3125,12 @@ Expecting one of '${allowedValues.join("', '")}'`);
         }
         
         // Check for duplicate group names
+        // Check if group already exists
         const existingGroup = this._optionGroups.find(g => g.name === group.name);
-        if (existingGroup) {
-            throw new Error(`Option group '${group.name}' already exists`);
+        if (!existingGroup) {
+            this._optionGroups.push(group);
+            this._optionProcessor.addOptionGroup(group);
         }
-        
-        this._optionGroups.push(group);
-        this._optionProcessor.addOptionGroup(group);
         
         // Add all options from the group to the command
         for (const option of group.options) {
