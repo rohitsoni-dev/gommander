@@ -32,7 +32,7 @@ This project adheres to a code of conduct that we expect all contributors to fol
 
 1. **Fork and Clone**
    ```bash
-   git clone https://github.com/your-username/gocommander.git
+   git clone https://github.com/rohitsoni-dev/gocommander.git
    cd gocommander
    ```
 
