@@ -501,11 +501,22 @@ Expecting one of '${allowedValues.join("', '")}'`);
 
     addArgument(argument) {
         const previousArgument = this.registeredArguments.slice(-1)[0];
+        
+        // Check for variadic argument constraint
         if (previousArgument?.variadic) {
             throw new Error(
                 `only the last argument can be variadic '${previousArgument.name()}'`
             );
         }
+        
+        // Check for required after optional constraint
+        if (argument.required && previousArgument && !previousArgument.required && !previousArgument.variadic) {
+            throw new Error(
+                `required argument '${argument.name()}' cannot be added after optional argument '${previousArgument.name()}'`
+            );
+        }
+        
+        // Check for default value on required argument
         if (
             argument.required &&
             argument.defaultValue !== undefined &&
@@ -515,6 +526,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
                 `a default value for a required argument is never used: '${argument.name()}'`
             );
         }
+        
         this.registeredArguments.push(argument);
 
         // Add to WASM if available
@@ -2097,8 +2109,34 @@ Expecting one of '${allowedValues.join("', '")}'`);
         return Promise.resolve();
     }
 
+    _validateArgumentStructure() {
+        // Validate that required arguments don't come after optional ones
+        let foundOptional = false;
+        let foundVariadic = false;
+        
+        for (let i = 0; i < this.registeredArguments.length; i++) {
+            const arg = this.registeredArguments[i];
+            
+            if (foundVariadic) {
+                throw new Error(`argument '${arg.name()}' cannot be added after variadic argument`);
+            }
+            
+            if (arg.variadic) {
+                foundVariadic = true;
+            } else if (!arg.required) {
+                foundOptional = true;
+            } else if (foundOptional) {
+                throw new Error(`required argument '${arg.name()}' cannot come after optional arguments`);
+            }
+        }
+    }
+
     _processArguments() {
         const processedArgs = [];
+        
+        // Validate argument structure first
+        this._validateArgumentStructure();
+        
         this.registeredArguments.forEach((declaredArg, index) => {
             let value = declaredArg.defaultValue;
             
@@ -2128,22 +2166,35 @@ Expecting one of '${allowedValues.join("', '")}'`);
                         throw new CommanderError(error.message);
                     }
                 }
+            } else if (!declaredArg.required && declaredArg.defaultValue !== undefined) {
+                // Only use default value for optional arguments when no value is provided
+                value = declaredArg.defaultValue;
             }
             
             // Validate choices
             if (declaredArg.argChoices && declaredArg.argChoices.length > 0 && value !== undefined) {
-                if (!declaredArg.argChoices.includes(value)) {
-                    throw new CommanderError(`error: invalid choice '${value}' for argument '${declaredArg.name()}'. Expected one of: ${declaredArg.argChoices.join(', ')}`);
+                if (Array.isArray(value)) {
+                    // For variadic arguments, validate each value
+                    value.forEach(v => {
+                        if (!declaredArg.argChoices.includes(v)) {
+                            throw new CommanderError(`error: invalid choice '${v}' for argument '${declaredArg.name()}'. Expected one of: ${declaredArg.argChoices.join(', ')}`);
+                        }
+                    });
+                } else {
+                    if (!declaredArg.argChoices.includes(value)) {
+                        throw new CommanderError(`error: invalid choice '${value}' for argument '${declaredArg.name()}'. Expected one of: ${declaredArg.argChoices.join(', ')}`);
+                    }
                 }
             }
             
             // Validate required arguments
-            if (declaredArg.required && (value === undefined || value === null)) {
-                this.missingArgument(declaredArg.name());
+            if (declaredArg.required && (value === undefined || value === null || (Array.isArray(value) && value.length === 0))) {
+                throw new CommanderError(`error: missing required argument '${declaredArg.name()}'`);
             }
             
             processedArgs[index] = value;
         });
+        
         this.processedArgs = processedArgs;
     }
 
@@ -2262,6 +2313,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
     _parseWithJS(argv) {
         // Enhanced JavaScript implementation using OptionProcessor
         const args = [];
+        const unknownOptions = [];
         
         try {
             // Reset option processor for fresh parsing
@@ -2302,25 +2354,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
 
                 // Handle double dash (--) separator - stop parsing options after this
                 if (arg === '--') {
-                    const separatorConfig = this.getArgumentSeparatorConfig();
-                    
-                    if (separatorConfig.stopOnDoubleDash) {
-                        stopOptionParsing = true;
-                        
-                        if (separatorConfig.includeInArgs) {
-                            args.push(arg);
-                        }
-                        
-                        if (separatorConfig.treatAsArguments) {
-                            // Add all remaining arguments as regular arguments
-                            args.push(...argv.slice(i + 1));
-                        }
-                        break;
-                    } else {
-                        // Treat -- as a regular argument
-                        args.push(arg);
-                        continue;
-                    }
+                    stopOptionParsing = true;
+                    // Add all remaining arguments as regular arguments (don't include the -- itself)
+                    args.push(...argv.slice(i + 1));
+                    break;
                 }
 
                 // If we've seen --, treat everything as regular arguments
@@ -2433,17 +2470,17 @@ Expecting one of '${allowedValues.join("', '")}'`);
                                 throw new CommanderError(`Unknown option handler failed for ${arg}: ${error.message}`);
                             }
                         } else if (this._passThroughOptions) {
-                            // Pass through unknown options
-                            args.push(arg);
+                            // Pass through unknown options - don't count as arguments
+                            unknownOptions.push(arg);
                             if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-                                args.push(argv[++i]);
+                                unknownOptions.push(argv[++i]);
                             }
                             handled = true;
                         } else if (this._allowUnknownOption) {
-                            // Store unknown option if allowed
-                            args.push(arg);
+                            // Store unknown option if allowed - don't count as arguments
+                            unknownOptions.push(arg);
                             if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-                                args.push(argv[++i]);
+                                unknownOptions.push(argv[++i]);
                             }
                             handled = true;
                         }
@@ -2482,7 +2519,8 @@ Expecting one of '${allowedValues.join("', '")}'`);
             const requiredArgCount = this.registeredArguments.filter(arg => arg.required).length;
             const maxArgCount = hasVariadicArg ? Infinity : this.registeredArguments.length;
             
-            if (args.length > maxArgCount && !this._allowExcessArguments) {
+            // Only check for excess arguments if we have registered arguments
+            if (this.registeredArguments.length > 0 && args.length > maxArgCount && !this._allowExcessArguments) {
                 if (this._excessArgumentHandler) {
                     try {
                         this._excessArgumentHandler(args.slice(this.registeredArguments.length));
@@ -2507,12 +2545,18 @@ Expecting one of '${allowedValues.join("', '")}'`);
             // Create final options object with proper precedence
             const options = this._buildFinalOptionsObject(processedOptions);
 
-            // Execute action if available
-            if (this._actionHandler) {
-                this._actionHandler(this.processedArgs || args, options);
+            // Add unknown options back to args if pass-through is enabled
+            let finalArgs = this.processedArgs || args;
+            if (this._passThroughOptions && unknownOptions.length > 0) {
+                finalArgs = [...finalArgs, ...unknownOptions];
             }
 
-            return { options, arguments: this.processedArgs || args };
+            // Execute action if available
+            if (this._actionHandler) {
+                this._actionHandler(finalArgs, options);
+            }
+
+            return { options, arguments: finalArgs };
         } catch (error) {
             if (error instanceof CommanderError) {
                 throw error;
