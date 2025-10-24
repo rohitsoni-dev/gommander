@@ -40,10 +40,10 @@ try {
   let buildCmd;
   if (useTinyGo) {
     // TinyGo with optimization flags
-    buildCmd = 'tinygo build -o wasm/gocommander.wasm -target wasm -opt 2 -gc leaking -no-debug bridge/interface.go';
+    buildCmd = 'tinygo build -o wasm/gocommander.wasm -target wasm -opt 2 -gc leaking -no-debug ./bridge';
   } else {
     // Standard Go with optimization flags
-    buildCmd = 'go build -ldflags="-s -w" -o wasm/gocommander.wasm bridge/interface.go';
+    buildCmd = 'go build -ldflags="-s -w" -o wasm/gocommander.wasm ./bridge';
   }
   
   execSync(buildCmd, {

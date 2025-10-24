@@ -5,7 +5,7 @@ class Argument {
     this.required = true;
     this.variadic = false;
     this.defaultValue = undefined;
-    this.choices = undefined;
+    this.argChoices = undefined;
     this.parseArg = undefined;
     
     this._parseName();
@@ -48,7 +48,7 @@ class Argument {
   }
 
   choices(values) {
-    this.choices = values;
+    this.argChoices = values.slice();
     return this;
   }
 

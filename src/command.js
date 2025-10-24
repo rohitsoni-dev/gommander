@@ -261,6 +261,28 @@ Expecting one of '${allowedValues.join("', '")}'`);
             return this;
         }
         
+        // Check if an option with the same flags already exists
+        const existingByFlags = this.options.find(existing => 
+            existing.flags === option.flags || 
+            (existing.long && option.long && existing.long === option.long) ||
+            (existing.short && option.short && existing.short === option.short)
+        );
+        
+        if (existingByFlags) {
+            // Replace the existing option with the new one
+            const index = this.options.indexOf(existingByFlags);
+            this.options[index] = option;
+            this._options[index] = option;
+            
+            // Update option processor
+            this._optionProcessor = new (require('./option-processor').OptionProcessor)();
+            for (const opt of this.options) {
+                this._optionProcessor.addOption(opt);
+            }
+            
+            return this;
+        }
+        
         this._registerOption(option);
 
         const oname = option.name();
@@ -368,6 +390,13 @@ Expecting one of '${allowedValues.join("', '")}'`);
     }
 
     _registerOption(option) {
+        // Check if this exact option is already registered
+        const existingOption = this.options.find(existing => existing === option);
+        if (existingOption) {
+            // Same option instance is already registered, skip validation
+            return;
+        }
+        
         // Check for direct flag conflicts, but allow if it's the exact same option being re-added
         const shortConflict = option.short && this._findOption(option.short);
         const longConflict = option.long && this._findOption(option.long);
@@ -382,22 +411,34 @@ Expecting one of '${allowedValues.join("', '")}'`);
 -  already used by option '${longConflict.flags}'`);
         }
         
-        // Check for negatable option conflicts only if both options are explicitly negatable
-        if (option.negatable && option.long) {
+        // Check for negatable option conflicts - allow complementary negatable options
+        if (option.long) {
             const baseName = option.long.replace(/^--/, '');
             
             if (baseName.startsWith('no-')) {
                 // This is a --no-xxx option, check for positive version
                 const positiveName = baseName.substring(3);
                 const positiveConflict = this._findOption(`--${positiveName}`);
-                if (positiveConflict && positiveConflict.negatable && positiveConflict !== option) {
-                    throw new Error(`Cannot add negatable option '${option.flags}'${this._name && ` to command '${this._name}'`} due to conflict with existing negatable option '${positiveConflict.flags}'`);
+                // Only conflict if both are explicitly negatable and different instances
+                if (positiveConflict && positiveConflict !== option && 
+                    option.negatable && positiveConflict.negatable) {
+                    // Allow complementary negatable options (--color and --no-color)
+                    // Only throw error if they're not complementary
+                    if (!this._areComplementaryNegatableOptions(option, positiveConflict)) {
+                        throw new Error(`Cannot add negatable option '${option.flags}'${this._name && ` to command '${this._name}'`} due to conflict with existing negatable option '${positiveConflict.flags}'`);
+                    }
                 }
             } else {
-                // This is a positive option, check for --no-xxx version only if it's explicitly negatable
+                // This is a positive option, check for --no-xxx version
                 const negativeConflict = this._findOption(`--no-${baseName}`);
-                if (negativeConflict && negativeConflict.negatable && negativeConflict !== option) {
-                    throw new Error(`Cannot add negatable option '${option.flags}'${this._name && ` to command '${this._name}'`} due to conflict with existing negatable option '${negativeConflict.flags}'`);
+                // Only conflict if both are explicitly negatable and different instances
+                if (negativeConflict && negativeConflict !== option && 
+                    option.negatable && negativeConflict.negatable) {
+                    // Allow complementary negatable options (--color and --no-color)
+                    // Only throw error if they're not complementary
+                    if (!this._areComplementaryNegatableOptions(option, negativeConflict)) {
+                        throw new Error(`Cannot add negatable option '${option.flags}'${this._name && ` to command '${this._name}'`} due to conflict with existing negatable option '${negativeConflict.flags}'`);
+                    }
                 }
             }
         }
@@ -412,6 +453,23 @@ Expecting one of '${allowedValues.join("', '")}'`);
             throw new Error(`Cannot add option '${option.flags}'${this._name && ` to command '${this._name}'`} due to conflicting attribute name '${attributeName}'
 -  already used by option '${attributeConflict.flags}'`);
         }
+    }
+
+    _areComplementaryNegatableOptions(option1, option2) {
+        // Check if two options are complementary negatable options (e.g., --color and --no-color)
+        if (!option1.long || !option2.long) return false;
+        
+        const name1 = option1.long.replace(/^--/, '');
+        const name2 = option2.long.replace(/^--/, '');
+        
+        // Check if one is the negated version of the other
+        if (name1.startsWith('no-')) {
+            return name1.substring(3) === name2;
+        } else if (name2.startsWith('no-')) {
+            return name2.substring(3) === name1;
+        }
+        
+        return false;
     }
 
     createArgument(name, description) {
@@ -2059,6 +2117,11 @@ Expecting one of '${allowedValues.join("', '")}'`);
                         `error: command-argument value '${value}' is invalid for argument '${declaredArg.name()}'.`);
                 }
             }
+            // Validate required arguments
+            if (declaredArg.required && (value === undefined || value === null)) {
+                this.missingArgument(declaredArg.name());
+            }
+            
             processedArgs[index] = value;
         });
         this.processedArgs = processedArgs;
@@ -2363,7 +2426,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
                         }
                         
                         if (!handled) {
-                            throw new CommanderError(`Unknown option: ${arg}`);
+                            throw new CommanderError(`error: unknown option '${arg}'`);
                         }
                     }
                 } else {
@@ -2402,7 +2465,8 @@ Expecting one of '${allowedValues.join("', '")}'`);
                 } else {
                     const expected = this.registeredArguments.length;
                     const s = expected === 1 ? '' : 's';
-                    throw new CommanderError(`Too many arguments. Expected ${expected} argument${s} but got ${args.length}.`);
+                    const forSubcommand = this.parent ? ` for '${this.name()}'` : '';
+                    throw new CommanderError(`error: too many arguments${forSubcommand}. Expected ${expected} argument${s} but got ${args.length}.`);
                 }
             }
 
@@ -2711,19 +2775,35 @@ Expecting one of '${allowedValues.join("', '")}'`);
                 }
             }
             
+            // Initialize processedValue early to avoid initialization errors
+            let processedValue = finalValue;
+            
             // Handle variadic options specially
             if (option.variadic) {
                 const currentValue = this.getOptionValue(option.attributeName());
-                const newValue = option._collectValue(finalValue, currentValue);
-                this.setOptionValueWithSource(option.attributeName(), newValue, 'cli');
+                processedValue = option._collectValue(finalValue, currentValue);
                 
                 // Process through option processor if available
-                if (this._optionProcessor && this._optionProcessor.processOption) {
-                    this._optionProcessor.processOption(flagName, finalValue);
+                // Skip option processor for variadic options with custom parsers to avoid conflicts
+                if (this._optionProcessor && this._optionProcessor.processOption && !option.parseArg) {
+                    try {
+                        this._optionProcessor.processOption(flagName, finalValue);
+                        // Get the processed value from the option processor for variadic options
+                        const processorValue = this._optionProcessor.getValue(option.attributeName());
+                        if (processorValue !== undefined) {
+                            processedValue = processorValue;
+                        }
+                    } catch (error) {
+                        // For variadic options, continue with local processing if processor fails
+                        console.warn(`Option processor warning for ${flagName}: ${error.message}`);
+                    }
                 }
+                
+                this.setOptionValueWithSource(option.attributeName(), processedValue, 'cli');
             } else {
                 // Process through option processor for validation and parsing if available
-                if (this._optionProcessor && this._optionProcessor.processOption) {
+                // Skip option processor if the option has a custom parser to avoid conflicts
+                if (this._optionProcessor && this._optionProcessor.processOption && !option.parseArg) {
                     try {
                         this._optionProcessor.processOption(flagName, finalValue);
                         // Get the processed value from the option processor
@@ -2732,15 +2812,21 @@ Expecting one of '${allowedValues.join("', '")}'`);
                             processedValue = processorValue;
                         }
                     } catch (error) {
-                        throw new CommanderError(`Option processor failed for ${flagName}: ${error.message}`);
+                        // Continue with local processing if processor fails
+                        console.warn(`Option processor warning for ${flagName}: ${error.message}`);
                     }
                 }
                 
-                // Apply custom parser if available
-                let processedValue = finalValue;
-                if (option.parseArg && finalValue !== undefined && finalValue !== null) {
+                // Apply custom parser if available (after processor)
+                if (option.parseArg && processedValue !== undefined && processedValue !== null) {
                     const currentValue = this.getOptionValue(option.attributeName());
-                    processedValue = option.parseArg(finalValue, currentValue);
+                    try {
+                        // Ensure we pass a string to the custom parser
+                        const valueToProcess = typeof processedValue === 'string' ? processedValue : String(processedValue);
+                        processedValue = option.parseArg(valueToProcess, currentValue);
+                    } catch (error) {
+                        throw new CommanderError(`Invalid value for option ${flagName}: ${error.message}`);
+                    }
                 }
                 
                 // Update command's internal state
@@ -2859,9 +2945,11 @@ Expecting one of '${allowedValues.join("', '")}'`);
             
             if (isSet && option.conflictsWith && option.conflictsWith.length > 0) {
                 for (const conflictFlag of option.conflictsWith) {
-                    const conflictOption = this._findOption(`--${conflictFlag}`) || 
-                                         this._findOption(`-${conflictFlag}`) ||
-                                         this.options.find(opt => opt.attributeName() === conflictFlag);
+                    // Try multiple ways to find the conflicting option
+                    let conflictOption = this._findOption(`--${conflictFlag}`) || 
+                                       this._findOption(`-${conflictFlag}`) ||
+                                       this.options.find(opt => opt.attributeName() === conflictFlag) ||
+                                       this.options.find(opt => opt.name() === conflictFlag);
                     
                     if (conflictOption) {
                         const conflictKey = conflictOption.attributeName();
@@ -2870,7 +2958,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
                         const conflictIsSet = conflictValue !== undefined && conflictSource !== 'default';
                         
                         if (conflictIsSet) {
-                            throw new CommanderError(`Option ${option.flags} cannot be used with option ${conflictOption.flags}`);
+                            throw new CommanderError(`Conflicting options: ${option.flags} and ${conflictOption.flags}`);
                         }
                     }
                 }
@@ -3203,11 +3291,42 @@ Expecting one of '${allowedValues.join("', '")}'`);
         for (const option of this.options) {
             if ((option.required || option.mandatory)) {
                 const key = option.attributeName();
-                const hasCliValue = this.getOptionValueSource(key) === 'cli';
-                const hasEnvValue = option.envVar && process.env[option.envVar] !== undefined;
+                const currentValue = this.getOptionValue(key);
+                const currentSource = this.getOptionValueSource(key);
+                
+                // Check if we have a CLI value
+                const hasCliValue = currentSource === 'cli' && currentValue !== undefined;
+                
+                // Check if we have an environment variable value
+                let hasEnvValue = false;
+                if (option.envVar && process.env[option.envVar] !== undefined) {
+                    hasEnvValue = true;
+                    // Set the environment variable value if no CLI value exists
+                    if (!hasCliValue) {
+                        try {
+                            const envValue = process.env[option.envVar];
+                            let processedEnvValue = envValue;
+                            
+                            // Apply custom parser if available
+                            if (option.parseArg) {
+                                processedEnvValue = option.parseArg(envValue, option.defaultValue);
+                            }
+                            
+                            this.setOptionValueWithSource(key, processedEnvValue, 'env');
+                        } catch (error) {
+                            // Environment variable value is invalid, treat as missing
+                            hasEnvValue = false;
+                        }
+                    }
+                }
+                
+                // Check if we have a default value
                 const hasDefaultValue = option.defaultValue !== undefined;
                 
-                if (!hasCliValue && !hasEnvValue && !hasDefaultValue) {
+                // For variadic options, check if we have an empty array (which is valid)
+                const hasValidVariadicValue = option.variadic && Array.isArray(currentValue);
+                
+                if (!hasCliValue && !hasEnvValue && !hasDefaultValue && !hasValidVariadicValue) {
                     missing.push({
                         option: option.flags,
                         envVar: option.envVar,

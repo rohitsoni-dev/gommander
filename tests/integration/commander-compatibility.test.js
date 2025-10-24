@@ -102,8 +102,12 @@ describe('Commander.js API Compatibility Tests', () => {
     test('should support subcommand creation like Commander.js', () => {
       const program = new Command('myapp');
       
-      // Basic subcommand
-      const sub1 = program.command('build', 'Build the project');
+      // Basic subcommand (executable - returns parent for chaining)
+      const result1 = program.command('build', 'Build the project');
+      expect(result1).toBe(program); // Executable subcommands return parent
+      
+      // Find the created subcommand
+      const sub1 = program.commands.find(cmd => cmd.name() === 'build');
       expect(sub1).toBeInstanceOf(Command);
       expect(sub1.name()).toBe('build');
       expect(sub1.description()).toBe('Build the project');
@@ -278,10 +282,12 @@ describe('Commander.js API Compatibility Tests', () => {
 
       for (const testCase of testCases) {
         const result = cmd.parse(testCase.args);
-        expect(result.args).toEqual(testCase.expected.args);
+        expect(result).toBe(cmd); // Parse returns the command instance
+        expect(cmd.args).toEqual(testCase.expected.args);
         
+        const opts = cmd.opts();
         for (const [key, value] of Object.entries(testCase.expected.options)) {
-          expect(result.options[key]).toBe(value);
+          expect(opts[key]).toBe(value);
         }
       }
     });

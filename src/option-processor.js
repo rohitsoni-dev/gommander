@@ -231,29 +231,44 @@ class OptionProcessor {
   getValues() {
     const result = {};
     
-    // Process all options to ensure proper precedence
+    // Process all options to ensure proper precedence: CLI > Environment > Default
     for (const [key, option] of this.options) {
       let value = this.values.get(key);
+      let valueSource = 'default';
       
-      // If no explicit value was set, check environment variables
-      if (value === undefined && option.envVar && process.env[option.envVar]) {
+      // Check if we have an explicit CLI value
+      if (value !== undefined) {
+        valueSource = 'cli';
+      } else if (option.envVar && process.env[option.envVar] !== undefined) {
+        // Check environment variable if no CLI value
         try {
-          value = option.parseArg ? 
-            option.parseArg(process.env[option.envVar], option.defaultValue) : 
-            process.env[option.envVar];
+          const envValue = process.env[option.envVar];
+          if (option.parseArg) {
+            value = option.parseArg(envValue, option.defaultValue);
+          } else {
+            value = envValue;
+          }
+          valueSource = 'env';
         } catch (error) {
           throw new Error(`Invalid environment variable value for ${option.flags}: ${error.message}`);
         }
-      }
-      
-      // Fall back to default value
-      if (value === undefined && option.defaultValue !== undefined) {
+      } else if (option.defaultValue !== undefined) {
+        // Fall back to default value
         value = option.defaultValue;
+        valueSource = 'default';
       }
       
-      // Store the final value
+      // For variadic options, ensure we always have an array
+      if (option.variadic && value === undefined) {
+        value = [];
+        valueSource = 'default';
+      }
+      
+      // Store the final value if it's defined
       if (value !== undefined) {
         result[key] = value;
+        // Store source information for debugging
+        result[`${key}_source`] = valueSource;
       }
     }
     
@@ -341,13 +356,23 @@ class OptionProcessor {
    * @throws {Error} - If options are incompatible
    */
   _checkCompatibility(option1, option2) {
-    // Check for flag conflicts
+    // Skip compatibility check if it's the same option instance
+    if (option1 === option2) {
+      return;
+    }
+    
+    // Check for flag conflicts only if they're different options
     if (option1.short && option2.short && option1.short === option2.short) {
       throw new Error(`Short flag conflict: both options use ${option1.short}`);
     }
 
     if (option1.long && option2.long && option1.long === option2.long) {
       throw new Error(`Long flag conflict: both options use ${option1.long}`);
+    }
+    
+    // Check for attribute name conflicts
+    if (option1.attributeName() === option2.attributeName()) {
+      throw new Error(`Attribute name conflict: both options use attribute '${option1.attributeName()}'`);
     }
   }
 

@@ -1,7 +1,7 @@
 import resolve from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import typescript from '@rollup/plugin-typescript';
-import { terser } from 'rollup-plugin-terser';
+import terser from '@rollup/plugin-terser';
 
 const external = [
   'fs', 'path', 'events', 'crypto', 'util', 'child_process', 
@@ -76,43 +76,6 @@ export default [
     plugins: [
       ...basePlugins,
       ...productionPlugins
-    ]
-  },
-  
-  // Minified UMD build for browsers
-  {
-    input: 'src/index.js',
-    output: {
-      file: 'lib/index.umd.js',
-      format: 'umd',
-      name: 'GoCommander',
-      exports: 'named',
-      sourcemap: !isProduction
-    },
-    external: external.filter(dep => !['events'].includes(dep)), // Include events for browser
-    plugins: [
-      resolve({
-        preferBuiltins: false,
-        browser: true
-      }),
-      commonjs(),
-      ...productionPlugins
-    ]
-  },
-  
-  // TypeScript definitions build
-  {
-    input: 'src/index.d.ts',
-    output: {
-      file: 'lib/index.d.ts',
-      format: 'es'
-    },
-    plugins: [
-      typescript({
-        declaration: true,
-        emitDeclarationOnly: true,
-        outDir: 'lib'
-      })
     ]
   }
 ];

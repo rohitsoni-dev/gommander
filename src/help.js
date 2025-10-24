@@ -140,6 +140,13 @@ class Help {
   // Get visible options for help display
   visibleOptions(cmd) {
     let options = cmd.options.filter(option => !option.hidden);
+    
+    // Add help option if it exists and is not already in the options
+    const helpOption = cmd._getHelpOption && cmd._getHelpOption();
+    if (helpOption && !options.find(opt => opt === helpOption)) {
+      options.push(helpOption);
+    }
+    
     if (this.sortOptions) {
       options.sort((a, b) => a.flags.localeCompare(b.flags));
     }

@@ -87,7 +87,7 @@ class Option {
       throw new Error(`Invalid short flag format: ${this.short}`);
     }
     
-    if (this.long && !/^--[a-zA-Z0-9][a-zA-Z0-9-]*$/.test(this.long)) {
+    if (this.long && !/^--[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(this.long)) {
       throw new Error(`Invalid long flag format: ${this.long}`);
     }
   }
@@ -103,8 +103,10 @@ class Option {
       this.optional = true;
       this.optionalValue = true;
     } else if (arg.startsWith('<') && arg.endsWith('>')) {
-      this.required = true;
+      // <value> syntax means the option requires a value when provided,
+      // but doesn't make the option itself mandatory unless explicitly set
       this.requiresValue = true;
+      // Don't set this.required = true here - that should only be set by requiredOption()
     }
   }
 
@@ -206,11 +208,28 @@ class Option {
 
   _collectValue(value, previous) {
     if (this.variadic) {
+      // Initialize with empty array if no previous value
       if (previous === undefined || previous === this.defaultValue) {
+        // If value is also undefined, return empty array for variadic options
+        if (value === undefined) {
+          return this.defaultValue !== undefined && Array.isArray(this.defaultValue) ? 
+                 this.defaultValue : [];
+        }
         return [value];
       }
+      
+      // Ensure previous is an array
       if (Array.isArray(previous)) {
+        // If value is undefined, just return the previous array
+        if (value === undefined) {
+          return previous;
+        }
         return previous.concat(value);
+      }
+      
+      // Convert non-array previous to array and add new value
+      if (value === undefined) {
+        return [previous];
       }
       return [previous, value];
     }
@@ -355,60 +374,43 @@ class Option {
       return value;
     }
     
-    // Don't convert if we have a custom parser
+    // Don't convert if we have a custom parser - let the parser handle it
     if (this.parseArg) {
       return value;
     }
     
-    // Infer type from argument description
+    // Only convert if explicitly requested through specific argument descriptions
+    // This is more conservative to avoid breaking existing behavior
     if (this.argDescription) {
       const desc = this.argDescription.toLowerCase();
       
-      // Number types
-      if (desc.includes('number') || desc.includes('num') || desc.includes('port') || desc.includes('count')) {
-        const num = Number(value);
-        if (!isNaN(num)) {
-          return num;
-        }
-      }
+      // Only convert for very specific patterns to avoid breaking tests
+      // Most Commander.js applications expect string values by default
       
-      // Integer types
-      if (desc.includes('int') || desc.includes('integer')) {
-        const int = parseInt(value, 10);
-        if (!isNaN(int)) {
-          return int;
-        }
-      }
-      
-      // Float types
-      if (desc.includes('float') || desc.includes('decimal')) {
-        const float = parseFloat(value);
-        if (!isNaN(float)) {
-          return float;
-        }
-      }
-      
-      // Boolean types
-      if (desc.includes('bool') || desc.includes('boolean') || desc.includes('flag')) {
+      // Boolean types - only for explicit boolean descriptions
+      if (desc === 'boolean' || desc === 'bool') {
         const lower = value.toLowerCase();
-        if (['true', 't', 'yes', 'y', '1', 'on'].includes(lower)) {
+        if (['true', 't', 'yes', 'y', '1', 'on', 'enable', 'enabled'].includes(lower)) {
           return true;
         }
-        if (['false', 'f', 'no', 'n', '0', 'off'].includes(lower)) {
+        if (['false', 'f', 'no', 'n', '0', 'off', 'disable', 'disabled'].includes(lower)) {
           return false;
         }
       }
     }
     
+    // Return string value by default to maintain Commander.js compatibility
     return value;
   }
 
   // Process variadic option values
   _processVariadicValue(value, previous) {
-    // Initialize with empty array if no previous value
+    // Initialize with empty array if no previous value or if previous is the default
     if (previous === undefined || previous === this.defaultValue) {
       if (value === undefined || value === '') {
-        return this.defaultValue !== undefined ? this.defaultValue : [];
+        // For variadic options, always return an array, even if empty
+        return this.defaultValue !== undefined && Array.isArray(this.defaultValue) ? 
+               this.defaultValue : [];
       }
       return [value];
     }
