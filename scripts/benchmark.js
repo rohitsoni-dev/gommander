@@ -98,6 +98,8 @@ async function runBenchmarks() {
     const cmd = new Command();
     cmd.option('-v, --verbose', 'verbose output');
     cmd.option('-p, --port <number>', 'port number', parseInt);
+    cmd.allowUnknownOption();
+    cmd.allowExcessArguments();
     cmd.parse(['node', 'script.js', '--verbose', '--port', '3000'], { from: 'node' });
   }, 10000);
   
@@ -114,6 +116,8 @@ async function runBenchmarks() {
     cmd.option('--debug', 'debug mode');
     cmd.argument('<input>', 'input file');
     cmd.argument('[output]', 'output file');
+    cmd.allowUnknownOption();
+    cmd.allowExcessArguments();
     
     cmd.parse([
       'node', 'script.js',
@@ -127,19 +131,33 @@ async function runBenchmarks() {
   // Test 3: Subcommand parsing
   await benchmark.run('Subcommand Parsing', () => {
     const cmd = new Command();
+    cmd.allowUnknownOption();
+    cmd.allowExcessArguments();
     
     const dbCmd = cmd.command('db');
-    dbCmd.command('migrate')
+    dbCmd.allowUnknownOption();
+    dbCmd.allowExcessArguments();
+    
+    const migrateCmd = dbCmd.command('migrate')
       .option('--dry-run', 'dry run')
       .option('--target <version>', 'target version');
+    migrateCmd.allowUnknownOption();
+    migrateCmd.allowExcessArguments();
     
-    dbCmd.command('seed')
+    const seedCmd = dbCmd.command('seed')
       .option('--env <env>', 'environment');
+    seedCmd.allowUnknownOption();
+    seedCmd.allowExcessArguments();
     
     const serverCmd = cmd.command('server');
-    serverCmd.command('start')
+    serverCmd.allowUnknownOption();
+    serverCmd.allowExcessArguments();
+    
+    const startCmd = serverCmd.command('start')
       .option('-p, --port <number>', 'port', parseInt)
       .option('--ssl', 'enable SSL');
+    startCmd.allowUnknownOption();
+    startCmd.allowExcessArguments();
     
     cmd.parse(['node', 'script.js', 'db', 'migrate', '--dry-run', '--target', '1.0.0'], { from: 'node' });
   }, 3000);
@@ -152,6 +170,8 @@ async function runBenchmarks() {
     cmd.option('-v, --verbose', 'verbose output');
     cmd.option('-p, --port <number>', 'port number', parseInt);
     cmd.argument('<input>', 'input file');
+    cmd.allowUnknownOption();
+    cmd.allowExcessArguments();
     
     const help = cmd.helpInformation();
   }, 2000);
@@ -175,6 +195,8 @@ async function runBenchmarks() {
     cmd.description('Test command');
     cmd.option('-v, --verbose', 'verbose');
     cmd.argument('<file>', 'file');
+    cmd.allowUnknownOption();
+    cmd.allowExcessArguments();
   }, 5000);
   
   benchmark.printSummary();

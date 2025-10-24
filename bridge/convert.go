@@ -739,7 +739,6 @@ func init() {
 
 // Exported WASM functions for type conversion
 
-//export convertGoToJS
 func convertGoToJS(this js.Value, args []js.Value) any {
 	if len(args) < 1 {
 		return js.ValueOf(map[string]any{
@@ -772,7 +771,6 @@ func convertGoToJS(this js.Value, args []js.Value) any {
 	})
 }
 
-//export convertJSToGo
 func convertJSToGo(this js.Value, args []js.Value) any {
 	if len(args) < 1 {
 		return js.ValueOf(map[string]any{
@@ -805,7 +803,6 @@ func convertJSToGo(this js.Value, args []js.Value) any {
 	})
 }
 
-//export serializeError
 func serializeError(this js.Value, args []js.Value) any {
 	if len(args) < 1 {
 		return js.ValueOf(map[string]any{

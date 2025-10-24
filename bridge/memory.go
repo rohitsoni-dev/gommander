@@ -292,7 +292,7 @@ func (mm *MemoryManager) GetMemoryStats() map[string]any {
 			"alloc":      memStats.Alloc,
 			"totalAlloc": memStats.TotalAlloc,
 			"sys":        memStats.Sys,
-			"numGC":      memStats.NumGC,
+			// NumGC field is not available in TinyGo, so we omit it
 		},
 	}
 }
@@ -322,7 +322,6 @@ func (mm *MemoryManager) generateRefID() string {
 
 // WASM exported functions for memory management
 
-//export allocateString
 func allocateString(this js.Value, args []js.Value) any {
 	if len(args) < 1 {
 		return js.ValueOf(map[string]any{
@@ -342,7 +341,6 @@ func allocateString(this js.Value, args []js.Value) any {
 	})
 }
 
-//export freeMemory
 func freeMemory(this js.Value, args []js.Value) any {
 	if len(args) < 1 {
 		return js.ValueOf(map[string]any{
@@ -374,7 +372,6 @@ func freeMemory(this js.Value, args []js.Value) any {
 	})
 }
 
-//export readString
 func readString(this js.Value, args []js.Value) any {
 	if len(args) < 2 {
 		return js.ValueOf(map[string]any{
@@ -409,7 +406,6 @@ func readString(this js.Value, args []js.Value) any {
 	})
 }
 
-//export createObjectRef
 func createObjectRef(this js.Value, args []js.Value) any {
 	if len(args) < 2 {
 		return js.ValueOf(map[string]any{
@@ -432,7 +428,6 @@ func createObjectRef(this js.Value, args []js.Value) any {
 	})
 }
 
-//export releaseObjectRef
 func releaseObjectRef(this js.Value, args []js.Value) any {
 	if len(args) < 1 {
 		return js.ValueOf(map[string]any{
@@ -456,7 +451,6 @@ func releaseObjectRef(this js.Value, args []js.Value) any {
 	})
 }
 
-//export getMemoryStats
 func getMemoryStats(this js.Value, args []js.Value) any {
 	mm := GetMemoryManager()
 	stats := mm.GetMemoryStats()
@@ -467,7 +461,6 @@ func getMemoryStats(this js.Value, args []js.Value) any {
 	})
 }
 
-//export cleanup
 func cleanup(this js.Value, args []js.Value) any {
 	mm := GetMemoryManager()
 	mm.Cleanup()

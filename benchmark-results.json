@@ -1,0 +1,50 @@
+{
+  "timestamp": "2025-10-24T09:00:20.733Z",
+  "nodeVersion": "v22.21.0",
+  "platform": "win32",
+  "arch": "x64",
+  "results": [
+    {
+      "name": "Basic Option Parsing",
+      "iterations": 10000,
+      "totalTime": "18191.61",
+      "avgTime": "1.8192",
+      "opsPerSec": "550"
+    },
+    {
+      "name": "Complex Command Parsing",
+      "iterations": 5000,
+      "totalTime": "9349.51",
+      "avgTime": "1.8699",
+      "opsPerSec": "535"
+    },
+    {
+      "name": "Subcommand Parsing",
+      "iterations": 3000,
+      "totalTime": "7032.94",
+      "avgTime": "2.3443",
+      "opsPerSec": "427"
+    },
+    {
+      "name": "Help Generation",
+      "iterations": 2000,
+      "totalTime": "126.14",
+      "avgTime": "0.0631",
+      "opsPerSec": "15855"
+    },
+    {
+      "name": "Error Handling",
+      "iterations": 1000,
+      "totalTime": "1190.41",
+      "avgTime": "1.1904",
+      "opsPerSec": "840"
+    },
+    {
+      "name": "Command Creation",
+      "iterations": 5000,
+      "totalTime": "104.83",
+      "avgTime": "0.0210",
+      "opsPerSec": "47696"
+    }
+  ]
+}

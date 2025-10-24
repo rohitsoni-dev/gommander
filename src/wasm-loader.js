@@ -68,7 +68,7 @@ class WASMLoader {
       if (!global.Go) {
         require(wasmExecPath);
       }
-      
+
       this.go = new global.Go();
 
       // Load the WASM binary
@@ -84,19 +84,19 @@ class WASMLoader {
       if (!wasmModule) {
         const wasmBuffer = fs.readFileSync(wasmPath);
         wasmModule = await WebAssembly.instantiate(wasmBuffer, this.go.importObject);
-        
+
         // Cache the compiled module
         this.cache.set(cacheKey, wasmModule);
       }
-      
+
       this.wasmInstance = wasmModule.instance;
-      
+
       // Start the Go program
       this.go.run(this.wasmInstance);
-      
+
       // Wait for initialization with timeout
       await this._waitForInitialization(options.timeout || 5000);
-      
+
       // Verify the interface is available
       if (typeof global.gocommander === 'undefined') {
         throw new Error('GoCommander WASM interface not available after initialization');
@@ -108,14 +108,14 @@ class WASMLoader {
 
     } catch (error) {
       this.loadPromise = null;
-      
+
       // If we've exceeded max attempts, switch to fallback mode
       if (this.loadAttempts >= this.maxLoadAttempts) {
         console.warn(`WASM loading failed after ${this.maxLoadAttempts} attempts, switching to JavaScript fallback:`, error.message);
         this.fallbackMode = true;
         return null;
       }
-      
+
       throw new Error(`Failed to load WASM (attempt ${this.loadAttempts}/${this.maxLoadAttempts}): ${error.message}`);
     }
   }
@@ -145,7 +145,7 @@ class WASMLoader {
       global.TextEncoder = global.TextEncoder || TextEncoder;
       global.TextDecoder = global.TextDecoder || TextDecoder;
       global.performance = global.performance || performance;
-      
+
       // Set up crypto
       if (!global.crypto) {
         try {
@@ -167,7 +167,7 @@ class WASMLoader {
 
   async _waitForInitialization(timeout = 5000) {
     const startTime = Date.now();
-    
+
     while (Date.now() - startTime < timeout) {
       if (typeof global.gocommander !== 'undefined') {
         // Additional check to ensure the interface is fully ready
@@ -178,17 +178,17 @@ class WASMLoader {
         } catch (e) {
           // Interface exists but not ready yet
         }
-        
+
         // If no isReady method, assume it's ready
         if (!global.gocommander.isReady) {
           return;
         }
       }
-      
+
       // Wait a bit before checking again
       await new Promise(resolve => setTimeout(resolve, 50));
     }
-    
+
     throw new Error(`WASM initialization timeout after ${timeout}ms`);
   }
 
@@ -196,11 +196,11 @@ class WASMLoader {
     if (this.fallbackMode) {
       return null;
     }
-    
+
     if (!this.isLoaded) {
       throw new Error('WASM not loaded. Call loadWASM() first.');
     }
-    
+
     return global.gocommander;
   }
 
