@@ -1880,9 +1880,28 @@ Expecting one of '${allowedValues.join("', '")}'`);
     }
 
     async _parseCommandAsync(operands, unknown) {
-        const parsed = this.parseOptions(unknown);
-        operands = operands.concat(parsed.operands);
-        unknown = parsed.unknown;
+        // Use _parseWithJS for actual parsing, but we need to extract operands and unknown
+        // from the arguments for subcommand handling
+        const result = this._parseWithJS(unknown);
+        
+        // For compatibility with the rest of the method, we need to separate
+        // operands (subcommands) from regular arguments
+        const args = result.arguments || [];
+        
+        // Find operands (potential subcommands) - these are non-option arguments
+        const potentialOperands = [];
+        const remainingArgs = [];
+        
+        for (const arg of args) {
+            if (this._findCommand(arg)) {
+                potentialOperands.push(arg);
+            } else {
+                remainingArgs.push(arg);
+            }
+        }
+        
+        operands = operands.concat(potentialOperands);
+        unknown = remainingArgs;
         this.args = operands.concat(unknown);
 
         if (operands && this._findCommand(operands[0])) {
@@ -1992,9 +2011,28 @@ Expecting one of '${allowedValues.join("', '")}'`);
     }
 
     _parseCommand(operands, unknown) {
-        const parsed = this.parseOptions(unknown);
-        operands = operands.concat(parsed.operands);
-        unknown = parsed.unknown;
+        // Use _parseWithJS for actual parsing, but we need to extract operands and unknown
+        // from the arguments for subcommand handling
+        const result = this._parseWithJS(unknown);
+        
+        // For compatibility with the rest of the method, we need to separate
+        // operands (subcommands) from regular arguments
+        const args = result.arguments || [];
+        
+        // Find operands (potential subcommands) - these are non-option arguments
+        const potentialOperands = [];
+        const remainingArgs = [];
+        
+        for (const arg of args) {
+            if (this._findCommand(arg)) {
+                potentialOperands.push(arg);
+            } else {
+                remainingArgs.push(arg);
+            }
+        }
+        
+        operands = operands.concat(potentialOperands);
+        unknown = remainingArgs;
         this.args = operands.concat(unknown);
 
         if (operands && this._findCommand(operands[0])) {
@@ -2371,6 +2409,163 @@ Expecting one of '${allowedValues.join("', '")}'`);
             }
             throw new CommanderError(error.message);
         }
+    }
+
+    /**
+     * Parse options from arguments array and return operands and unknown options.
+     * This method is used by _parseCommand and _parseCommandAsync.
+     * 
+     * @param {string[]} args - Array of arguments to parse
+     * @returns {object} Object with operands and unknown arrays
+     */
+    parseOptions(args) {
+        const operands = []; // operands, not options or values
+        const unknown = []; // first unknown option and remaining unknown args
+        let dest = operands;
+
+        function maybeOption(arg) {
+            return arg.length > 1 && arg[0] === '-';
+        }
+
+        const negativeNumberArg = (arg) => {
+            // return false if not a negative number
+            if (!/^-\d*\.?\d+(e[+-]?\d+)?$/.test(arg)) return false;
+            // negative number is ok unless digit used as an option in command hierarchy
+            const commandAndAncestors = this._getCommandAndAncestors();
+            return !commandAndAncestors.some((cmd) =>
+                cmd.options
+                    .map((opt) => opt.short)
+                    .some((short) => /^-\d$/.test(short)),
+            );
+        };
+
+        // parse options
+        let activeVariadicOption = null;
+        let activeGroup = null; // working through group of short options, like -abc
+        let i = 0;
+        while (i < args.length || activeGroup) {
+            const arg = activeGroup ?? args[i++];
+            activeGroup = null;
+
+            // literal
+            if (arg === '--') {
+                if (dest === unknown) dest.push(arg);
+                dest.push(...args.slice(i));
+                break;
+            }
+
+            if (
+                activeVariadicOption &&
+                (!maybeOption(arg) || negativeNumberArg(arg))
+            ) {
+                this.emit(`option:${activeVariadicOption.name()}`, arg);
+                continue;
+            }
+            activeVariadicOption = null;
+
+            if (maybeOption(arg)) {
+                const option = this._findOption(arg);
+                // recognised option, call listener to assign value with possible custom processing
+                if (option) {
+                    if (option.required) {
+                        const value = args[i++];
+                        if (value === undefined) this.optionMissingArgument(option);
+                        this.emit(`option:${option.name()}`, value);
+                    } else if (option.optional) {
+                        let value = null;
+                        // historical behaviour is optional value is following arg unless an option
+                        if (
+                            i < args.length &&
+                            (!maybeOption(args[i]) || negativeNumberArg(args[i]))
+                        ) {
+                            value = args[i++];
+                        }
+                        this.emit(`option:${option.name()}`, value);
+                    } else {
+                        // boolean flag
+                        this.emit(`option:${option.name()}`);
+                    }
+                    activeVariadicOption = option.variadic ? option : null;
+                    continue;
+                }
+            }
+
+            // Look for combo options following single dash, eat first one if known.
+            if (arg.length > 2 && arg[0] === '-' && arg[1] !== '-') {
+                const option = this._findOption(`-${arg[1]}`);
+                if (option) {
+                    if (
+                        option.required ||
+                        (option.optional && this._combineFlagAndOptionalValue)
+                    ) {
+                        // option with value following in same argument
+                        this.emit(`option:${option.name()}`, arg.slice(2));
+                    } else {
+                        // boolean option
+                        this.emit(`option:${option.name()}`);
+                        // remove the processed option and keep processing group
+                        activeGroup = `-${arg.slice(2)}`;
+                    }
+                    continue;
+                }
+            }
+
+            // Look for known long flag with value, like --foo=bar
+            if (/^--[^=]+=/.test(arg)) {
+                const index = arg.indexOf('=');
+                const option = this._findOption(arg.slice(0, index));
+                if (option && (option.required || option.optional)) {
+                    this.emit(`option:${option.name()}`, arg.slice(index + 1));
+                    continue;
+                }
+            }
+
+            // Not a recognised option by this command.
+            // Might be a command-argument, or subcommand option, or unknown option, or help command or option.
+
+            // An unknown option means further arguments also classified as unknown so can be reprocessed by subcommands.
+            // A negative number in a leaf command is not an unknown option.
+            if (
+                dest === operands &&
+                maybeOption(arg) &&
+                !(this.commands.length === 0 && negativeNumberArg(arg))
+            ) {
+                dest = unknown;
+            }
+
+            // If using positionalOptions, stop processing our options at subcommand.
+            if (
+                (this._enablePositionalOptions || this._passThroughOptions) &&
+                operands.length === 0 &&
+                unknown.length === 0
+            ) {
+                if (this._findCommand(arg)) {
+                    operands.push(arg);
+                    unknown.push(...args.slice(i));
+                    break;
+                } else if (
+                    this._getHelpCommand() &&
+                    arg === this._getHelpCommand().name()
+                ) {
+                    operands.push(arg, ...args.slice(i));
+                    break;
+                } else if (this._defaultCommandName) {
+                    unknown.push(arg, ...args.slice(i));
+                    break;
+                }
+            }
+
+            // If using passThroughOptions, stop processing options at first command-argument.
+            if (this._passThroughOptions) {
+                dest.push(arg, ...args.slice(i));
+                break;
+            }
+
+            // add arg
+            dest.push(arg);
+        }
+
+        return { operands, unknown };
     }
 
     // WASM Helper methods

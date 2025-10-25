@@ -457,8 +457,8 @@ describe('Performance Benchmarking Tests', () => {
       
       // Verify it works
       cmd.option('-v, --verbose', 'verbose output');
-      const result = cmd.parse(['node', 'test', '-v']);
-      expect(result.options.verbose).toBe(true);
+      cmd.parse(['node', 'test', '-v']);
+      expect(cmd.opts().verbose).toBe(true);
     });
   });
 

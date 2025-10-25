@@ -44,11 +44,14 @@ describe('Cross-Platform Compatibility Tests', () => {
     test('should work with platform-specific Node.js features', () => {
       const command = new Command('platform-test');
       
-      // Test process.platform access
-      command.option('--platform', 'show platform', platform);
-      const result = command.parse(['node', 'test', '--platform']);
+      // Test process.platform access - when flag is present, should be true
+      command.option('--platform', 'show platform');
+      command.parse(['node', 'test', '--platform']);
       
-      expect(result.options.platform).toBe(platform);
+      expect(command.opts().platform).toBe(true);
+      
+      // Test that we can access the actual platform
+      expect(process.platform).toBe(platform);
     });
 
     test('should handle platform-specific environment variables', () => {
@@ -59,9 +62,9 @@ describe('Cross-Platform Compatibility Tests', () => {
       const envValue = process.env[envVar];
       
       command.option('--home <path>', 'home directory', envValue);
-      const result = command.parse(['node', 'test']);
+      command.parse(['node', 'test']);
       
-      expect(result.options.home).toBe(envValue);
+      expect(command.opts().home).toBe(envValue);
     });
   });
 
@@ -91,10 +94,10 @@ describe('Cross-Platform Compatibility Tests', () => {
         '/very/long/path/that/goes/deep/into/many/subdirectories/and/keeps/going/file.txt'
       ];
 
+      command.option('-f, --file <path>', 'file path');
+      
       for (const testPath of testPaths) {
-        command
-          .option('-f, --file <path>', 'file path')
-          .parse(['node', 'test', '--file', testPath]);
+        command.parse(['node', 'test', '--file', testPath]);
         
         expect(command.getOptionValue('file')).toBe(testPath);
         
@@ -115,12 +118,12 @@ describe('Cross-Platform Compatibility Tests', () => {
         '../sibling/directory'
       ];
 
+      command.option('-p, --path <path>', 'path to resolve');
+      
       for (const relativePath of relativePaths) {
         const resolved = path.resolve(relativePath);
         
-        command
-          .option('-p, --path <path>', 'path to resolve')
-          .parse(['node', 'test', '--path', relativePath]);
+        command.parse(['node', 'test', '--path', relativePath]);
         
         const inputPath = command.getOptionValue('path');
         expect(inputPath).toBe(relativePath);
@@ -143,12 +146,12 @@ describe('Cross-Platform Compatibility Tests', () => {
         '/absolute/path/./with/../mixed/elements'
       ];
 
+      command.option('-p, --path <path>', 'path to normalize');
+      
       for (const testPath of pathsToNormalize) {
         const normalized = path.normalize(testPath);
         
-        command
-          .option('-p, --path <path>', 'path to normalize')
-          .parse(['node', 'test', '--path', testPath]);
+        command.parse(['node', 'test', '--path', testPath]);
         
         expect(command.getOptionValue('path')).toBe(testPath);
         expect(() => path.normalize(testPath)).not.toThrow();
@@ -272,7 +275,7 @@ describe('Cross-Platform Compatibility Tests', () => {
         
         // Should parse without errors
         expect(() => {
-          command.parse();
+          command.parse(testArgv);
         }).not.toThrow();
         
         // Reset
@@ -297,8 +300,11 @@ describe('Cross-Platform Compatibility Tests', () => {
       for (const envVar of commonEnvVars) {
         const envValue = process.env[envVar];
         if (envValue) {
-          command.option(`--${envVar.toLowerCase()}`, `${envVar} value`, envValue);
-          expect(command.getOptionValue(envVar.toLowerCase())).toBe(envValue);
+          const optionName = envVar.toLowerCase().replace(/_/g, '-');
+          command.option(`--${optionName}`, `${envVar} value`, envValue);
+          // Parse empty arguments to apply default values
+          command.parse(['node', 'test']);
+          expect(command.getOptionValue(optionName)).toBe(envValue);
         }
       }
     });
@@ -342,10 +348,10 @@ describe('Cross-Platform Compatibility Tests', () => {
         'MYFILE.JS'
       ];
 
+      command.option('-f, --file <name>', 'file name');
+      
       for (const fileName of fileNames) {
-        command
-          .option('-f, --file <name>', 'file name')
-          .parse(['node', 'test', '--file', fileName]);
+        command.parse(['node', 'test', '--file', fileName]);
         
         expect(command.getOptionValue('file')).toBe(fileName);
         command.setOptionValue('file', undefined);
@@ -369,11 +375,11 @@ describe('Cross-Platform Compatibility Tests', () => {
         '.test.spec.js'
       ];
 
+      command.option('-f, --file <name>', 'file name');
+      
       for (const ext of fileExtensions) {
         const fileName = `testfile${ext}`;
-        command
-          .option('-f, --file <name>', 'file name')
-          .parse(['node', 'test', '--file', fileName]);
+        command.parse(['node', 'test', '--file', fileName]);
         
         expect(command.getOptionValue('file')).toBe(fileName);
         command.setOptionValue('file', undefined);
@@ -412,9 +418,8 @@ describe('Cross-Platform Compatibility Tests', () => {
       // Create a long option value (but not too long to cause issues)
       const longValue = 'x'.repeat(Math.min(1000, maxLength / 10));
       
-      command
-        .option('-l, --long <value>', 'long value')
-        .parse(['node', 'test', '--long', longValue]);
+      command.option('-l, --long <value>', 'long value');
+      command.parse(['node', 'test', '--long', longValue]);
       
       expect(command.getOptionValue('long')).toBe(longValue);
     });
@@ -493,16 +498,15 @@ describe('Cross-Platform Compatibility Tests', () => {
       const command = new Command('windows-test');
       
       // Test Windows-specific paths
-      command
-        .option('-p, --path <path>', 'Windows path')
-        .parse(['node', 'test', '--path', 'C:\\Program Files\\App']);
+      command.option('-p, --path <path>', 'Windows path');
+      command.parse(['node', 'test', '--path', 'C:\\Program Files\\App']);
       
       expect(command.getOptionValue('path')).toBe('C:\\Program Files\\App');
       
-      // Test UNC paths
-      command
-        .option('-u, --unc <path>', 'UNC path')
-        .parse(['node', 'test', '--unc', '\\\\server\\share']);
+      // Reset and test UNC paths
+      command.setOptionValue('path', undefined);
+      command.option('-u, --unc <path>', 'UNC path');
+      command.parse(['node', 'test', '--unc', '\\\\server\\share']);
       
       expect(command.getOptionValue('unc')).toBe('\\\\server\\share');
     });

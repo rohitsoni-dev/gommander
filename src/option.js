@@ -207,7 +207,7 @@ class Option {
   }
 
   isBoolean() {
-    return !this.required && !this.optional;
+    return !this.requiresValue && !this.optionalValue;
   }
 
   _collectValue(value, previous) {
