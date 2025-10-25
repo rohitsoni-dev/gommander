@@ -1,4 +1,4 @@
-const { Command } = require('../lib/index.js');
+const { Command } = require('../src/index.js');
 const { CommanderError, InvalidArgumentError, InvalidOptionArgumentError } = require('../src/errors');
 
 describe('Error Handling and Edge Cases', () => {

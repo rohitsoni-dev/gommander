@@ -194,7 +194,7 @@ class OptionProcessor {
         for (const conflictFlag of option1.conflictsWith) {
           const { key: conflictKey, option: conflictOption } = this._findOption(conflictFlag);
           if (conflictOption && this.values.has(conflictKey)) {
-            throw new Error(`Conflicting options: ${option1.flags} and ${conflictOption.flags}`);
+            throw new Error(`Option ${option1.flags} cannot be used with option ${conflictOption.flags}`);
           }
         }
       }

@@ -1477,6 +1477,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
     _parseWithJS(argv) {
         // Enhanced JavaScript implementation using OptionProcessor
         const args = [];
+        let doubleDashFound = false;
         
         try {
             // Reset option processor for fresh parsing
@@ -1495,7 +1496,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
                             option.parseArg(envValue, option.defaultValue) : envValue;
                         this.setOptionValueWithSource(option.attributeName(), processedEnvValue, 'env');
                     } catch (error) {
-                        throw new CommanderError(`Invalid environment variable value for ${option.flags}: ${error.message}`);
+                        throw new CommanderError(`error: option '${option.flags}' value '${envValue}' from env '${option.envVar}' is invalid. ${error.message}`);
                     }
                 }
                 
@@ -1510,33 +1511,94 @@ Expecting one of '${allowedValues.join("', '")}'`);
             for (let i = 0; i < argv.length; i++) {
                 const arg = argv[i];
 
-                if (arg.startsWith('-')) {
-                    // Handle options with enhanced processing
-                    const option = this._findOptionByFlag(arg);
+                // Handle double dash separator
+                if (arg === '--') {
+                    doubleDashFound = true;
+                    // Add all remaining arguments as regular arguments
+                    args.push(...argv.slice(i + 1));
+                    break;
+                }
+
+                // After double dash, treat everything as arguments
+                if (doubleDashFound) {
+                    args.push(arg);
+                    continue;
+                }
+
+                if (arg.startsWith('-') && !doubleDashFound) {
+                    // Handle combined short options (e.g., -abc)
+                    if (arg.startsWith('-') && !arg.startsWith('--') && arg.length > 2) {
+                        const combinedFlags = arg.slice(1);
+                        let allHandled = true;
+                        
+                        for (let j = 0; j < combinedFlags.length; j++) {
+                            const shortFlag = `-${combinedFlags[j]}`;
+                            const option = this._findOptionByFlag(shortFlag);
+                            
+                            if (option) {
+                                if (option.requiresValue && j === combinedFlags.length - 1) {
+                                    // Last flag in combination can take a value
+                                    if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                                        this._processOptionWithEnhancements(option.attributeName(), argv[++i], option);
+                                    } else {
+                                        this.optionMissingArgument(option);
+                                    }
+                                } else if (option.requiresValue) {
+                                    throw new CommanderError(`error: option '${option.flags}' argument missing`);
+                                } else {
+                                    // Boolean option
+                                    this._processOptionWithEnhancements(option.attributeName(), true, option);
+                                }
+                            } else {
+                                allHandled = false;
+                                break;
+                            }
+                        }
+                        
+                        if (allHandled) {
+                            continue;
+                        }
+                    }
+
+                    // Handle option with equals sign (e.g., --port=8080)
+                    let optionArg = arg;
+                    let optionValue = null;
+                    if (arg.includes('=')) {
+                        const equalIndex = arg.indexOf('=');
+                        optionArg = arg.substring(0, equalIndex);
+                        optionValue = arg.substring(equalIndex + 1);
+                    }
+
+                    const option = this._findOptionByFlag(optionArg);
                     
                     if (option) {
-                        const flagName = this._extractFlagName(arg);
-                        
                         if (option.requiresValue && !option.optionalValue) {
                             // Option requires a value
-                            if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-                                this._processOptionWithEnhancements(flagName, argv[++i], option);
-                            } else {
-                                throw new CommanderError(`Option ${arg} requires a value`);
+                            let value = optionValue;
+                            if (value === null) {
+                                if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                                    value = argv[++i];
+                                } else {
+                                    throw new CommanderError(`error: option '${option.flags}' argument missing`);
+                                }
                             }
-                        } else if (option.optionalValue && i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-                            // Option has optional value and next arg is not a flag
-                            this._processOptionWithEnhancements(flagName, argv[++i], option);
+                            this._processOptionWithEnhancements(option.attributeName(), value, option);
                         } else if (option.optionalValue) {
-                            // Optional value not provided, use preset or default
-                            const presetValue = option.presetArg !== undefined ? option.presetArg : 
-                                               (option.isBoolean() ? true : option.defaultValue);
-                            this._processOptionWithEnhancements(flagName, presetValue, option);
+                            // Option has optional value
+                            let value = optionValue;
+                            if (value === null && i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                                value = argv[++i];
+                            }
+                            if (value === null) {
+                                value = option.presetArg !== undefined ? option.presetArg : 
+                                       (option.isBoolean() ? true : option.defaultValue);
+                            }
+                            this._processOptionWithEnhancements(option.attributeName(), value, option);
                         } else {
                             // Boolean option - handle negation properly
-                            const isNegated = option.negate && arg.includes('no-');
+                            const isNegated = option.negate && optionArg.includes('no-');
                             const value = isNegated ? false : true;
-                            this._processOptionWithEnhancements(flagName, value, option);
+                            this._processOptionWithEnhancements(option.attributeName(), value, option);
                         }
                     } else {
                         // Handle unknown options with enhanced logic
@@ -1545,34 +1607,28 @@ Expecting one of '${allowedValues.join("', '")}'`);
                         if (this._unknownOptionHandler) {
                             // Use custom handler for unknown options
                             try {
-                                let value = null;
-                                if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                                let value = optionValue;
+                                if (value === null && i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
                                     value = argv[i + 1];
                                     i++; // Consume the value
                                 }
-                                this._unknownOptionHandler(arg, value);
+                                this._unknownOptionHandler(optionArg, value);
                                 handled = true;
                             } catch (error) {
-                                throw new CommanderError(`Unknown option handler failed for ${arg}: ${error.message}`);
+                                throw new CommanderError(`error: unknown option handler failed for '${optionArg}': ${error.message}`);
                             }
                         } else if (this._passThroughOptions) {
                             // Pass through unknown options
                             args.push(arg);
-                            if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-                                args.push(argv[++i]);
-                            }
                             handled = true;
                         } else if (this._allowUnknownOption) {
                             // Store unknown option if allowed
                             args.push(arg);
-                            if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-                                args.push(argv[++i]);
-                            }
                             handled = true;
                         }
                         
                         if (!handled) {
-                            throw new CommanderError(`Unknown option: ${arg}`);
+                            this.unknownOption(optionArg);
                         }
                     }
                 } else {
@@ -1599,18 +1655,20 @@ Expecting one of '${allowedValues.join("', '")}'`);
             this._optionProcessor.validate();
             this._validateOptionConstraints();
 
-            // Handle excess arguments if needed
-            if (args.length > this.registeredArguments.length && !this._allowExcessArguments) {
+            // Validate required arguments
+            this._validateRequiredArguments(args);
+
+            // Handle excess arguments if needed (but not for variadic arguments)
+            const hasVariadicArgument = this.registeredArguments.some(arg => arg.variadic);
+            if (!hasVariadicArgument && args.length > this.registeredArguments.length && !this._allowExcessArguments) {
                 if (this._excessArgumentHandler) {
                     try {
                         this._excessArgumentHandler(args.slice(this.registeredArguments.length));
                     } catch (error) {
-                        throw new CommanderError(`Excess argument handler failed: ${error.message}`);
+                        throw new CommanderError(`error: excess argument handler failed: ${error.message}`);
                     }
                 } else {
-                    const expected = this.registeredArguments.length;
-                    const s = expected === 1 ? '' : 's';
-                    throw new CommanderError(`Too many arguments. Expected ${expected} argument${s} but got ${args.length}.`);
+                    this._excessArguments(args);
                 }
             }
 
@@ -1974,7 +2032,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
                         const conflictIsSet = this.getOptionValue(conflictKey) !== undefined && 
                                             this.getOptionValueSource(conflictKey) !== 'default';
                         if (conflictIsSet) {
-                            throw new CommanderError(`Option ${option.flags} cannot be used with option ${conflictOption.flags}`);
+                            this._conflictingOption(option, conflictOption);
                         }
                     }
                 }
@@ -1991,6 +2049,30 @@ Expecting one of '${allowedValues.join("', '")}'`);
                                                impliedOption.defaultValue : true;
                             this.setOptionValueWithSource(impliedKey, impliedValue, 'implied');
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Validate required arguments
+     * @private
+     */
+    _validateRequiredArguments(args) {
+        for (let i = 0; i < this.registeredArguments.length; i++) {
+            const argument = this.registeredArguments[i];
+            
+            if (argument.required) {
+                if (argument.variadic) {
+                    // Variadic required argument needs at least one value
+                    if (i >= args.length || args.slice(i).length === 0) {
+                        this.missingArgument(argument.name());
+                    }
+                } else {
+                    // Regular required argument
+                    if (i >= args.length) {
+                        this.missingArgument(argument.name());
                     }
                 }
             }
