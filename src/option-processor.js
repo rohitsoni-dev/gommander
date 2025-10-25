@@ -15,6 +15,29 @@ class OptionProcessor {
   }
 
   /**
+   * Reset values for fresh parsing while keeping option structure
+   */
+  reset() {
+    this.values.clear();
+  }
+
+  /**
+   * Add preprocessor for an option
+   */
+  addPreprocessor(optionName, processor) {
+    this.preprocessors.set(optionName, processor);
+    return this;
+  }
+
+  /**
+   * Add postprocessor for an option
+   */
+  addPostprocessor(optionName, processor) {
+    this.postprocessors.set(optionName, processor);
+    return this;
+  }
+
+  /**
    * Add an option to the processor
    * @param {Option} option - The option to add
    * @returns {OptionProcessor} - Returns this for chaining

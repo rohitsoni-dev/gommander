@@ -899,6 +899,38 @@ Expecting one of '${allowedValues.join("', '")}'`);
     }
 
     /**
+     * Add option preprocessor function
+     */
+    addOptionPreprocessor(optionName, processor) {
+        if (typeof processor !== 'function') {
+            throw new Error('Preprocessor must be a function');
+        }
+        
+        if (!this._optionProcessor) {
+            this._optionProcessor = new OptionProcessor();
+        }
+        
+        this._optionProcessor.addPreprocessor(optionName, processor);
+        return this;
+    }
+
+    /**
+     * Add option postprocessor function
+     */
+    addOptionPostprocessor(optionName, processor) {
+        if (typeof processor !== 'function') {
+            throw new Error('Postprocessor must be a function');
+        }
+        
+        if (!this._optionProcessor) {
+            this._optionProcessor = new OptionProcessor();
+        }
+        
+        this._optionProcessor.addPostprocessor(optionName, processor);
+        return this;
+    }
+
+    /**
      * Reset parsing configuration to defaults
      */
     resetParsingConfig() {
@@ -2154,37 +2186,41 @@ Expecting one of '${allowedValues.join("', '")}'`);
 
 
     _parseWithJS(argv) {
-
-        // Enhanced JavaScript implementation using OptionProcessor
+        // Optimized JavaScript implementation - avoid recreating OptionProcessor
         const args = [];
-        const unknownOptions = [];
+        const options = {};
         
         try {
-            // Reset option processor for fresh parsing
-            this._optionProcessor = new OptionProcessor();
-            
-            // Add all options to the processor with enhanced features
-            for (const option of this.options) {
-                const optionKey = this._optionProcessor._getOptionKey(option);
-                if (!this._optionProcessor.options.has(optionKey)) {
+            // Initialize option processor only once if not exists
+            if (!this._optionProcessor) {
+                this._optionProcessor = new OptionProcessor();
+                
+                // Add all options to the processor once
+                for (const option of this.options) {
                     this._optionProcessor.addOption(option);
                 }
+            }
+            
+            // Reset values for fresh parsing but keep processor structure
+            this._optionProcessor.reset();
+            
+            // Process environment variables and defaults efficiently
+            for (const option of this.options) {
+                const key = option.attributeName();
                 
-                // Set up environment variable handling
+                // Handle environment variables
                 if (option.envVar && process.env[option.envVar]) {
                     const envValue = process.env[option.envVar];
-                    // Process environment value through option parser if available
                     try {
                         const processedEnvValue = option.parseArg ? 
                             option.parseArg(envValue, option.defaultValue) : envValue;
-                        this.setOptionValueWithSource(option.attributeName(), processedEnvValue, 'env');
+                        this.setOptionValueWithSource(key, processedEnvValue, 'env');
                     } catch (error) {
                         throw new CommanderError(`Invalid environment variable value for ${option.flags}: ${error.message}`);
                     }
                 }
                 
                 // Initialize default values
-                const key = option.attributeName();
                 if (option.defaultValue !== undefined && this.getOptionValue(key) === undefined) {
                     this.setOptionValueWithSource(key, option.defaultValue, 'default');
                 }
