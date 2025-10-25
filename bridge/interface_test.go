@@ -7,7 +7,7 @@ import (
 	"syscall/js"
 	"testing"
 
-	"github.com/rohitsoni-dev/gocommander/cmd"
+	"github.com/rohitsoni007/gocommander/cmd"
 )
 
 func TestCreateCommand(t *testing.T) {

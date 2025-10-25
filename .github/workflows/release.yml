@@ -365,7 +365,7 @@ jobs:
           🎉 GoCommander ${{ needs.validate-release.outputs.version }} released successfully!
           
           📦 NPM: https://www.npmjs.com/package/gocommander
-          🏷️ GitHub: https://github.com/rohitsoni-dev/gocommander/releases/tag/${{ needs.validate-release.outputs.tag }}
+          🏷️ GitHub: https://github.com/rohitsoni007/gocommander/releases/tag/${{ needs.validate-release.outputs.tag }}
           📚 Docs: https://gocommander.dev
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -391,7 +391,7 @@ jobs:
             
             **Release Links:**
             - NPM: https://www.npmjs.com/package/gocommander
-            - GitHub: https://github.com/rohitsoni-dev/gocommander/releases/tag/v${version}
+            - GitHub: https://github.com/rohitsoni007/gocommander/releases/tag/v${version}
             - Documentation: https://gocommander.dev
             `,
             labels: ['release', 'post-release']

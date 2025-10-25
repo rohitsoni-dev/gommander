@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rohitsoni-dev/gocommander/cmd"
+	"github.com/rohitsoni007/gocommander/cmd"
 )
 
 func TestTypeConverterCreation(t *testing.T) {

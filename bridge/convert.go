@@ -10,7 +10,7 @@ import (
 	"syscall/js"
 	"time"
 
-	"github.com/rohitsoni-dev/gocommander/cmd"
+	"github.com/rohitsoni007/gocommander/cmd"
 )
 
 // TypeConverter handles conversion between Go and JavaScript types

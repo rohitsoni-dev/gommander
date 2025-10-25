@@ -290,8 +290,8 @@ program.addHelpText('afterAll', (context) => {
   
   let helpText = `\n📚 Additional Resources:\n`;
   helpText += `  • Documentation: https://gocommander.dev/docs\n`;
-  helpText += `  • GitHub: https://github.com/rohitsoni-dev/gocommander\n`;
-  helpText += `  • Issues: https://github.com/rohitsoni-dev/gocommander/issues\n\n`;
+  helpText += `  • GitHub: https://github.com/rohitsoni007/gocommander\n`;
+  helpText += `  • Issues: https://github.com/rohitsoni007/gocommander/issues\n\n`;
   
   if (isSubcommand) {
     helpText += `💡 Run '${context.program.name()} --help' for general help.\n`;

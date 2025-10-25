@@ -414,7 +414,7 @@ Examples:
   $ file-manager delete temp-file.txt --force
   $ file-manager info *.js --checksum
 
-For more information, visit: https://github.com/rohitsoni-dev/gocommander
+For more information, visit: https://github.com/rohitsoni007/gocommander
 `);
 
 // Parse command line arguments

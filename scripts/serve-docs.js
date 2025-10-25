@@ -99,7 +99,7 @@ function renderMarkdown(content) {
     <div class="nav">
         <a href="/">Home</a>
         <a href="/api/">API Docs</a>
-        <a href="https://github.com/rohitsoni-dev/gocommander">GitHub</a>
+        <a href="https://github.com/rohitsoni007/gocommander">GitHub</a>
     </div>
     <div id="content">
         ${content

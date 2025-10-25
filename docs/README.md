@@ -25,6 +25,6 @@ Welcome to the GoCommander documentation! GoCommander is a high-performance Go-b
 
 ## Support
 
-- [GitHub Issues](https://github.com/rohitsoni-dev/gocommander/issues)
+- [GitHub Issues](https://github.com/rohitsoni007/gocommander/issues)
 - [API Documentation](api/)
 - [Examples Repository](examples/)

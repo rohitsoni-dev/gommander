@@ -122,7 +122,7 @@ GoCommander delivers exceptional performance improvements over Commander.js:
 
 ```bash
 # Clone the repository
-git clone https://github.com/rohitsoni-dev/gocommander.git
+git clone https://github.com/rohitsoni007/gocommander.git
 cd gocommander
 
 # Install dependencies

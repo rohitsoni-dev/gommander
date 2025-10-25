@@ -404,7 +404,7 @@ Examples:
     $ api-client config --set token=abc123
     $ api-client config --list
 
-For more information, visit: https://github.com/rohitsoni-dev/gocommander
+For more information, visit: https://github.com/rohitsoni007/gocommander
 `);
 
 // Parse command line arguments

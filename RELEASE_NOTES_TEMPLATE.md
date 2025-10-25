@@ -81,11 +81,11 @@ This release has been tested on:
 ### 🔗 Links
 
 - **NPM Package**: https://www.npmjs.com/package/gocommander
-- **GitHub Repository**: https://github.com/rohitsoni-dev/gocommander
+- **GitHub Repository**: https://github.com/rohitsoni007/gocommander
 - **Documentation**: https://gocommander.dev
 - **Migration Guide**: https://gocommander.dev/migration-guide
 - **API Reference**: https://gocommander.dev/api
-- **Examples**: https://github.com/rohitsoni-dev/gocommander/tree/main/examples
+- **Examples**: https://github.com/rohitsoni007/gocommander/tree/main/examples
 
 ### 🙏 Acknowledgments
 
@@ -102,8 +102,8 @@ For a complete list of changes, see the [CHANGELOG.md](CHANGELOG.md) file.
 **Need Help?**
 
 - 📖 Check the [documentation](https://gocommander.dev)
-- 🐛 Report issues on [GitHub](https://github.com/rohitsoni-dev/gocommander/issues)
-- 💬 Join discussions on [GitHub Discussions](https://github.com/rohitsoni-dev/gocommander/discussions)
+- 🐛 Report issues on [GitHub](https://github.com/rohitsoni007/gocommander/issues)
+- 💬 Join discussions on [GitHub Discussions](https://github.com/rohitsoni007/gocommander/discussions)
 - 📧 Contact the maintainers
 
 **Enjoying GoCommander?**

@@ -106,7 +106,7 @@ gh release create v1.0.4 \
   --latest
 
 # Or manually through GitHub web interface:
-# 1. Go to https://github.com/rohitsoni-dev/gocommander/releases
+# 1. Go to https://github.com/rohitsoni007/gocommander/releases
 # 2. Click "Create a new release"
 # 3. Choose tag v1.0.4
 # 4. Set title: "GoCommander v1.0.4 - Production Ready"
@@ -288,4 +288,4 @@ git push origin :refs/tags/v1.0.4
 
 **🎉 Congratulations! GoCommander v1.0.4 is now live and ready to revolutionize CLI development!**
 
-For questions or issues with deployment, please refer to the [Contributing Guide](CONTRIBUTING.md) or open an issue on [GitHub](https://github.com/rohitsoni-dev/gocommander/issues).
+For questions or issues with deployment, please refer to the [Contributing Guide](CONTRIBUTING.md) or open an issue on [GitHub](https://github.com/rohitsoni007/gocommander/issues).

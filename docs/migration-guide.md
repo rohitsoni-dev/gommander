@@ -548,5 +548,5 @@ If you encounter issues during migration:
 
 - Check the [API Documentation](api/) for detailed reference
 - Review [Examples](examples/) for common patterns
-- Open an issue on [GitHub](https://github.com/rohitsoni-dev/gocommander/issues)
+- Open an issue on [GitHub](https://github.com/rohitsoni007/gocommander/issues)
 - Compare with [Commander.js documentation](https://github.com/tj/commander.js) for expected behavior

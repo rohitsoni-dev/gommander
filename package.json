@@ -105,12 +105,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rohitsoni-dev/gocommander.git"
+    "url": "https://github.com/rohitsoni007/gocommander.git"
   },
   "bugs": {
-    "url": "https://github.com/rohitsoni-dev/gocommander/issues"
+    "url": "https://github.com/rohitsoni007/gocommander/issues"
   },
-  "homepage": "https://github.com/rohitsoni-dev/gocommander#readme",
+  "homepage": "https://github.com/rohitsoni007/gocommander#readme",
   "engines": {
     "node": ">=14.0.0"
   },
