@@ -294,6 +294,17 @@ class OptionProcessor {
   }
 
   /**
+   * Set a value for an option
+   * @param {string} key - The option key
+   * @param {*} value - The value to set
+   * @returns {OptionProcessor} - Returns this for chaining
+   */
+  setValue(key, value) {
+    this.values.set(key, value);
+    return this;
+  }
+
+  /**
    * Add an option group for validation
    * @param {OptionGroup} group - The option group
    * @returns {OptionProcessor} - Returns this for chaining

@@ -2113,475 +2113,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
         return Promise.resolve();
     }
 
-    /**
-     * Parse arguments using JavaScript implementation
-     */
-    _parseWithJS(argv) {
-        console.log('_parseWithJS called with:', argv);
-        try {
-            const args = [];
-            const options = {};
-            let doubleDashFound = false;
-            
-            // Initialize option processor if not exists
-            if (!this._optionProcessor) {
-                this._optionProcessor = new OptionProcessor();
-                // Add all options to processor
-                for (const option of this.options) {
-                    this._optionProcessor.addOption(option);
-                }
-            }
 
-            // Process arguments
-            for (let i = 0; i < argv.length; i++) {
-                const arg = argv[i];
-                console.log('Processing arg at index', i, ':', arg);
-                
-                // Handle double dash separator
-                if (arg === '--') {
-                    console.log('Found double dash at index', i);
-                    doubleDashFound = true;
-                    // Add remaining arguments as-is
-                    for (let j = i + 1; j < argv.length; j++) {
-                        args.push(argv[j]);
-                        console.log('Adding arg after --:', argv[j]);
-                    }
-                    break;
-                }
-                
-                // If we found double dash, treat everything as arguments
-                if (doubleDashFound) {
-                    args.push(arg);
-                    continue;
-                }
-                
-                // Handle options
-                if (arg.startsWith('-') && !doubleDashFound) {
-                    let processed = false;
-                    
-                    // Handle option with equals sign (--port=8080)
-                    if (arg.includes('=')) {
-                        const [flagPart, valuePart] = arg.split('=', 2);
-                        const option = this._findOption(flagPart);
-                        
-                        if (option) {
-                            const flagName = this._extractFlagName(flagPart);
-                            this._setOptionValue(flagName, valuePart, option, options);
-                            processed = true;
-                        }
-                    }
-                    
-                    // Handle combined short options (-abc)
-                    else if (arg.startsWith('-') && !arg.startsWith('--') && arg.length > 2) {
-                        const flags = arg.slice(1);
-                        let allProcessed = true;
-                        
-                        for (let j = 0; j < flags.length; j++) {
-                            const flag = `-${flags[j]}`;
-                            const option = this._findOption(flag);
-                            
-                            if (option) {
-                                if (option.requiresValue && !option.optionalValue) {
-                                    if (j === flags.length - 1) {
-                                        if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-                                            this._setOptionValue(flags[j], argv[++i], option, options);
-                                        } else {
-                                            throw new CommanderError(`error: option '${flag}' requires a value`);
-                                        }
-                                    } else {
-                                        throw new CommanderError(`error: option '${flag}' requires a value but is combined with other flags`);
-                                    }
-                                } else {
-                                    const value = option.isBoolean() ? true : (option.presetArg !== undefined ? option.presetArg : true);
-                                    this._setOptionValue(flags[j], value, option, options);
-                                }
-                            } else {
-                                allProcessed = false;
-                                break;
-                            }
-                        }
-                        
-                        if (allProcessed) {
-                            processed = true;
-                        }
-                    }
-                    
-                    // Handle regular options
-                    if (!processed) {
-                        const option = this._findOption(arg);
-                        
-                        if (option) {
-                            const flagName = this._extractFlagName(arg);
-                            
-                            if (option.requiresValue && !option.optionalValue) {
-                                if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-                                    this._setOptionValue(flagName, argv[++i], option, options);
-                                } else {
-                                    throw new CommanderError(`error: option '${option.flags}' requires a value`);
-                                }
-                            } else {
-                                const value = option.isBoolean() ? true : (option.presetArg !== undefined ? option.presetArg : true);
-                                this._setOptionValue(flagName, value, option, options);
-                            }
-                            processed = true;
-                        }
-                    }
-                    
-                    // Handle unknown options
-                    if (!processed) {
-                        if (this._unknownOptionHandler) {
-                            this._unknownOptionHandler(arg, i + 1 < argv.length ? argv[i + 1] : undefined);
-                            processed = true;
-                        } else if (this._allowUnknownOption || this._passThroughOptions) {
-                            args.push(arg);
-                            if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-                                args.push(argv[++i]);
-                            }
-                            processed = true;
-                        }
-                        
-                        if (!processed) {
-                            throw new CommanderError(`error: unknown option '${arg}'`);
-                        }
-                    }
-                } else {
-                    // Handle positional options if enabled
-                    if (this._enablePositionalOptions && this._positionalOptions) {
-                        const position = args.length;
-                        const optionName = this._positionalOptions.get(position);
-                        
-                        if (optionName) {
-                            const option = this._findOption(`--${optionName}`) || this._findOption(`-${optionName}`);
-                            if (option) {
-                                this._setOptionValue(optionName, arg, option, options);
-                                continue;
-                            }
-                        }
-                    }
-                    
-                    args.push(arg);
-                }
-            }
-
-            // Validate required options
-            this._checkForMissingMandatoryOptions();
-            
-            // Validate option constraints
-            this._validateOptionConstraints();
-            
-            // Store raw arguments
-            this.args = args;
-            
-            // If double dash was found, return raw arguments without processing
-            if (doubleDashFound) {
-                console.log('Double dash found, returning raw args:', args);
-                return { options, arguments: args };
-            }
-            
-            // Process arguments normally
-            this._processArguments();
-
-            // Handle excess arguments
-            const hasVariadicArg = this.registeredArguments.some(arg => arg.variadic);
-            const maxArgCount = hasVariadicArg ? Infinity : this.registeredArguments.length;
-            
-            if (this.registeredArguments.length > 0 && args.length > maxArgCount && !this._allowExcessArguments && !this._passThroughOptions) {
-                if (this._excessArgumentHandler) {
-                    this._excessArgumentHandler(args.slice(this.registeredArguments.length));
-                } else {
-                    const expected = this.registeredArguments.length;
-                    const s = expected === 1 ? '' : 's';
-                    const forSubcommand = this.parent ? ` for '${this.name()}'` : '';
-                    throw new CommanderError(`error: too many arguments${forSubcommand}. Expected ${expected} argument${s} but got ${args.length}.`);
-                }
-            }
-
-            // Execute action if available
-            if (this._actionHandler) {
-                this._actionHandler(this.processedArgs || args, options);
-            }
-
-            return { options, arguments: this.processedArgs || args };
-        } catch (error) {
-            if (error instanceof CommanderError) {
-                throw error;
-            }
-            throw new CommanderError(error.message);
-        }
-    }
-
-    /**
-     * Set option value with proper processing
-     */
-    _setOptionValue(flagName, value, option, options) {
-        const attributeName = option.attributeName();
-        
-        // Handle negated boolean options
-        if (flagName.startsWith('no-') && option.negate) {
-            options[attributeName] = false;
-            this.setOptionValueWithSource(attributeName, false, 'cli');
-            return;
-        }
-        
-        // Process value through option parser if available
-        let processedValue = value;
-        if (option.parseArg) {
-            try {
-                processedValue = option.parseArg(value, option.defaultValue);
-            } catch (error) {
-                throw new CommanderError(`error: option '${option.flags}' ${error.message}`);
-            }
-        }
-        
-        // Handle choice validation
-        if (option.argChoices && option.argChoices.length > 0) {
-            if (!option.argChoices.includes(processedValue)) {
-                throw new CommanderError(`error: option '${option.flags}' argument '${processedValue}' is invalid. Allowed choices are ${option.argChoices.join(', ')}.`);
-            }
-        }
-        
-        // Handle variadic options
-        if (option.variadic) {
-            if (!options[attributeName]) {
-                options[attributeName] = [];
-            }
-            options[attributeName].push(processedValue);
-        } else {
-            options[attributeName] = processedValue;
-        }
-        
-        this.setOptionValueWithSource(attributeName, options[attributeName], 'cli');
-    }
-
-    /**
-     * Extract flag name from option flag
-     */
-    _extractFlagName(flag) {
-        if (flag.startsWith('--')) {
-            return flag.slice(2);
-        } else if (flag.startsWith('-')) {
-            return flag.slice(1);
-        }
-        return flag;
-    }
-
-    _validateArgumentStructure() {
-        // Validate that required arguments don't come after optional ones
-        let foundOptional = false;
-        let foundVariadic = false;
-        
-        for (let i = 0; i < this.registeredArguments.length; i++) {
-            const arg = this.registeredArguments[i];
-            
-            if (foundVariadic) {
-                throw new Error(`argument '${arg.name()}' cannot be added after variadic argument`);
-            }
-            
-            if (arg.variadic) {
-                foundVariadic = true;
-            } else if (!arg.required) {
-                foundOptional = true;
-            } else if (foundOptional) {
-                throw new Error(`required argument '${arg.name()}' cannot come after optional arguments`);
-            }
-        }
-    }
-
-    _processArguments() {
-        const processedArgs = [];
-        
-        // Validate argument structure first
-        this._validateArgumentStructure();
-        
-        // Check for required arguments first
-        const requiredArgCount = this.registeredArguments.filter(arg => arg.required).length;
-        const hasVariadicArg = this.registeredArguments.some(arg => arg.variadic);
-        
-        // If we have required arguments but not enough provided arguments
-        if (requiredArgCount > 0 && this.args.length < requiredArgCount) {
-            // Find the first missing required argument
-            for (let i = 0; i < this.registeredArguments.length; i++) {
-                const declaredArg = this.registeredArguments[i];
-                if (declaredArg.required && i >= this.args.length) {
-                    throw new CommanderError(`error: missing required argument '${declaredArg.name()}'`);
-                }
-            }
-        }
-        
-        this.registeredArguments.forEach((declaredArg, index) => {
-            let value = declaredArg.defaultValue;
-            
-            if (declaredArg.variadic) {
-                if (index < this.args.length) {
-                    value = this.args.slice(index);
-                    if (declaredArg.parseArg) {
-                        value = value.map(v => {
-                            try {
-                                return this._callParseArg(declaredArg, v, declaredArg.defaultValue, 
-                                    `error: command-argument value '${v}' is invalid for argument '${declaredArg.name()}'.`);
-                            } catch (error) {
-                                throw new CommanderError(error.message);
-                            }
-                        });
-                    }
-                } else if (value === undefined) {
-                    value = [];
-                }
-            } else if (index < this.args.length) {
-                value = this.args[index];
-                if (declaredArg.parseArg) {
-                    try {
-                        value = this._callParseArg(declaredArg, value, declaredArg.defaultValue,
-                            `error: command-argument value '${value}' is invalid for argument '${declaredArg.name()}'.`);
-                    } catch (error) {
-                        throw new CommanderError(error.message);
-                    }
-                }
-            } else if (!declaredArg.required && declaredArg.defaultValue !== undefined) {
-                // Only use default value for optional arguments when no value is provided
-                value = declaredArg.defaultValue;
-            }
-            
-            // Validate choices
-            if (declaredArg.argChoices && declaredArg.argChoices.length > 0 && value !== undefined) {
-                if (Array.isArray(value)) {
-                    // For variadic arguments, validate each value
-                    value.forEach(v => {
-                        if (!declaredArg.argChoices.includes(v)) {
-                            throw new CommanderError(`error: invalid choice '${v}' for argument '${declaredArg.name()}'. Expected one of: ${declaredArg.argChoices.join(', ')}`);
-                        }
-                    });
-                } else {
-                    if (!declaredArg.argChoices.includes(value)) {
-                        throw new CommanderError(`error: invalid choice '${value}' for argument '${declaredArg.name()}'. Expected one of: ${declaredArg.argChoices.join(', ')}`);
-                    }
-                }
-            }
-            
-            // Validate required arguments (double check)
-            if (declaredArg.required && (value === undefined || value === null || (Array.isArray(value) && value.length === 0))) {
-                throw new CommanderError(`error: missing required argument '${declaredArg.name()}'`);
-            }
-            
-            processedArgs[index] = value;
-        });
-        
-        this.processedArgs = processedArgs;
-    }
-
-    parseOptions(args) {
-        const operands = [];
-        const unknown = [];
-        let dest = operands;
-
-        function maybeOption(arg) {
-            return arg.length > 1 && arg[0] === '-';
-        }
-
-        let i = 0;
-        while (i < args.length) {
-            const arg = args[i++];
-
-            if (arg === '--') {
-                if (dest === unknown) dest.push(arg);
-                dest.push(...args.slice(i));
-                break;
-            }
-
-            if (maybeOption(arg)) {
-                const option = this._findOption(arg);
-                if (option) {
-                    if (option.required) {
-                        const value = args[i++];
-                        if (value === undefined) this.optionMissingArgument(option);
-                        this.emit(`option:${option.name()}`, value);
-                    } else if (option.optional) {
-                        let value = null;
-                        if (i < args.length && !maybeOption(args[i])) {
-                            value = args[i++];
-                        }
-                        this.emit(`option:${option.name()}`, value);
-                    } else {
-                        this.emit(`option:${option.name()}`);
-                    }
-                    continue;
-                }
-            }
-
-            if (dest === operands && maybeOption(arg) && !(this.commands.length === 0)) {
-                dest = unknown;
-            }
-
-            dest.push(arg);
-        }
-
-        return { operands, unknown };
-    }
-
-    // Helper methods
-
-    async _addOptionToWASM(option) {
-        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
-            return;
-        }
-
-        try {
-            const wasmInterface = wasmLoader.getInterface();
-            const result = wasmInterface.addOption(
-                this._wasmCommandId,
-                option.flags,
-                option.description,
-                option.defaultValue,
-                option.required
-            );
-
-            if (result.error) {
-                console.warn('Failed to add option to WASM:', result.error);
-            }
-        } catch (error) {
-            console.warn('Error adding option to WASM:', error.message);
-        }
-    }
-
-    async _addArgumentToWASM(argument) {
-        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
-            return;
-        }
-
-        try {
-            const wasmInterface = wasmLoader.getInterface();
-            const result = wasmInterface.addArgument(
-                this._wasmCommandId,
-                argument.name,
-                argument.description,
-                argument.required
-            );
-
-            if (result.error) {
-                console.warn('Failed to add argument to WASM:', result.error);
-            }
-        } catch (error) {
-            console.warn('Error adding argument to WASM:', error.message);
-        }
-    }
-
-    async _parseWithWASM(argv) {
-        const wasmInterface = wasmLoader.getInterface();
-        const result = wasmInterface.parseArguments(this._wasmCommandId, argv);
-
-        if (result.error) {
-            throw new CommanderError(result.error);
-        }
-
-        // Execute action if available
-        if (this._action) {
-            await this._action(result.arguments, result.options);
-        }
-
-        return result;
-    }
 
     _parseWithJS(argv) {
+
         // Enhanced JavaScript implementation using OptionProcessor
         const args = [];
         const unknownOptions = [];
@@ -2622,6 +2157,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
             
             for (let i = 0; i < argv.length; i++) {
                 const arg = argv[i];
+
 
                 // Handle double dash (--) separator - stop parsing options after this
                 if (arg === '--') {
@@ -2784,6 +2320,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
             }
 
             // Enhanced validation with option groups and custom validators
+
             this._optionProcessor.validate();
             this._validateOptionConstraints();
             this._validateEnvironmentVariables();
@@ -2834,6 +2371,146 @@ Expecting one of '${allowedValues.join("', '")}'`);
             }
             throw new CommanderError(error.message);
         }
+    }
+
+    // WASM Helper methods
+    async _addOptionToWASM(option) {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.addOption(
+                this._wasmCommandId,
+                option.flags,
+                option.description,
+                option.defaultValue,
+                option.required
+            );
+
+            if (result.error) {
+                console.warn('Failed to add option to WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error adding option to WASM:', error.message);
+        }
+    }
+
+    async _addArgumentToWASM(argument) {
+        if (!this._wasmCommandId || !wasmLoader.isWASMLoaded()) {
+            return;
+        }
+
+        try {
+            const wasmInterface = wasmLoader.getInterface();
+            const result = wasmInterface.addArgument(
+                this._wasmCommandId,
+                argument.name,
+                argument.description,
+                argument.required
+            );
+
+            if (result.error) {
+                console.warn('Failed to add argument to WASM:', result.error);
+            }
+        } catch (error) {
+            console.warn('Error adding argument to WASM:', error.message);
+        }
+    }
+
+    async _parseWithWASM(argv) {
+        const wasmInterface = wasmLoader.getInterface();
+        const result = wasmInterface.parseArguments(this._wasmCommandId, argv);
+
+        if (result.error) {
+            throw new CommanderError(result.error);
+        }
+
+        // Execute action if available
+        if (this._action) {
+            await this._action(result.arguments, result.options);
+        }
+
+        return result;
+    }
+
+    _processArguments() {
+        const processedArgs = [];
+        
+        // Check for required arguments first
+        const requiredArgCount = this.registeredArguments.filter(arg => arg.required).length;
+        
+        // If we have required arguments but not enough provided arguments
+        if (requiredArgCount > 0 && this.args.length < requiredArgCount) {
+            // Find the first missing required argument
+            for (let i = 0; i < this.registeredArguments.length; i++) {
+                const declaredArg = this.registeredArguments[i];
+                if (declaredArg.required && i >= this.args.length) {
+                    throw new CommanderError(`error: missing required argument '${declaredArg.name()}'`);
+                }
+            }
+        }
+        
+        this.registeredArguments.forEach((declaredArg, index) => {
+            let value = declaredArg.defaultValue;
+            
+            if (declaredArg.variadic) {
+                if (index < this.args.length) {
+                    value = this.args.slice(index);
+                    if (declaredArg.parseArg) {
+                        value = value.map(v => {
+                            try {
+                                return this._callParseArg(declaredArg, v, declaredArg.defaultValue, 
+                                    `error: command-argument value '${v}' is invalid for argument '${declaredArg.name()}'.`);
+                            } catch (error) {
+                                throw new CommanderError(error.message);
+                            }
+                        });
+                    }
+                } else if (value === undefined) {
+                    value = [];
+                }
+            } else if (index < this.args.length) {
+                value = this.args[index];
+                if (declaredArg.parseArg) {
+                    try {
+                        value = this._callParseArg(declaredArg, value, declaredArg.defaultValue,
+                            `error: command-argument value '${value}' is invalid for argument '${declaredArg.name()}'.`);
+                    } catch (error) {
+                        throw new CommanderError(error.message);
+                    }
+                }
+            } else if (!declaredArg.required && declaredArg.defaultValue !== undefined) {
+                // Only use default value for optional arguments when no value is provided
+                value = declaredArg.defaultValue;
+            }
+            
+            // Validate choices
+            if (declaredArg.argChoices && declaredArg.argChoices.length > 0 && value !== undefined) {
+                if (Array.isArray(value)) {
+                    // For variadic arguments, validate each value
+                    value.forEach(v => {
+                        if (!declaredArg.argChoices.includes(v)) {
+                            throw new CommanderError(`error: invalid choice '${v}' for argument '${declaredArg.name()}'. Expected one of: ${declaredArg.argChoices.join(', ')}`);
+                        }
+                    });
+                } else {
+                    if (!declaredArg.argChoices.includes(value)) {
+                        throw new CommanderError(`error: invalid choice '${value}' for argument '${declaredArg.name()}'. Expected one of: ${declaredArg.argChoices.join(', ')}`);
+                    }
+                }
+            }
+            
+            // Validate required arguments (double check)
+            if (declaredArg.required && (value === undefined || value === null || (Array.isArray(value) && value.length === 0))) {
+                throw new CommanderError(`error: missing required argument '${declaredArg.name()}'`);
+            }
+            
+            processedArgs[index] = value;
+        });
+        
+        this.processedArgs = processedArgs;
     }
 
     // Utility methods
@@ -3147,6 +2824,12 @@ Expecting one of '${allowedValues.join("', '")}'`);
                 }
                 
                 this.setOptionValueWithSource(option.attributeName(), processedValue, 'cli');
+                
+                // Update OptionProcessor values for validation
+                if (this._optionProcessor) {
+                    const optionKey = this._optionProcessor._getOptionKey(option);
+                    this._optionProcessor.setValue(optionKey, processedValue);
+                }
             } else {
                 // Apply custom parser if available
                 if (option.parseArg && finalValue !== undefined && finalValue !== null && !isNegated) {
@@ -3187,6 +2870,12 @@ Expecting one of '${allowedValues.join("', '")}'`);
                 
                 // Update command's internal state
                 this.setOptionValueWithSource(option.attributeName(), processedValue, 'cli');
+                
+                // Update OptionProcessor values for validation
+                if (this._optionProcessor) {
+                    const optionKey = this._optionProcessor._getOptionKey(option);
+                    this._optionProcessor.setValue(optionKey, processedValue);
+                }
                 
                 // Emit option event for compatibility
                 this.emit(`option:${option.name()}`, processedValue);
@@ -5084,6 +4773,37 @@ Expecting one of '${allowedValues.join("', '")}'`);
             this.outputError(message);
             process.exit(exitCode);
         }
+    }
+
+    /**
+     * Custom JSON serialization to handle circular references
+     * @returns {Object} Serializable representation of the command
+     */
+    toJSON() {
+        return {
+            name: this._name,
+            description: this._description,
+            summary: this._summary,
+            aliases: this._aliases,
+            hidden: this._hidden,
+            usage: this._usage,
+            commands: this.commands.map(cmd => ({
+                name: cmd._name,
+                description: cmd._description,
+                hidden: cmd._hidden
+            })),
+            options: this.options.map(opt => ({
+                flags: opt.flags,
+                description: opt.description,
+                required: opt.required
+            })),
+            arguments: this.registeredArguments.map(arg => ({
+                name: arg.name(),
+                description: arg.description,
+                required: arg.required
+            })),
+            hasParent: !!this.parent
+        };
     }
 }
 
